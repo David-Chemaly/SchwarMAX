@@ -85,7 +85,7 @@ def compute_rho_m(R, z, M, phi, rho_fn, params):
     return rho_m
 
 @jax.jit
-def jax_rho_m_eval(m, R, z, Rgrid, Zgrid, rho_real, rho_img, Mx_real, My_real, Mx_img, My_img, R0):
+def jax_rho_m_eval(m, R, z, Rgrid, Zgrid, rho_real, rho_img, Mx_real, My_real, Mx_img, My_img):
     real_values = rho_real[m]
     imag_values = rho_img[m]
     M_x_real = Mx_real[m]
@@ -94,8 +94,7 @@ def jax_rho_m_eval(m, R, z, Rgrid, Zgrid, rho_real, rho_img, Mx_real, My_real, M
     M_y_imag = My_img[m]
 
     shape = R.shape
-    _R, _z = _Rz_rescale_forward(R, jnp.abs(z), R0)
-    pts = jnp.column_stack((_R.ravel(), _z.ravel()))
+    pts = jnp.column_stack((R.ravel(), jnp.abs(z).ravel()))
 
     real_part = cubic_spline_evaluate(pts, (Rgrid, Zgrid), real_values, M_x_real, M_y_real, fill_value=0.0).reshape(shape)
     imag_part = cubic_spline_evaluate(pts, (Rgrid, Zgrid), imag_values, M_x_imag, M_y_imag, fill_value=0.0).reshape(shape)
@@ -221,32 +220,8 @@ def _xieta_to_Rz_jacobian(xi, eta, Rzminmax):
     return Rp, zp, J
 
 @jax.jit
-def _Rz_rescale_forward(R, z, R0):
-    """
-    Forward map:
-        R̃ = ln(1 + R/R0)
-        z̃ = ln(1 + z/R0)
-    Works with scalars or arrays.
-    """
-    R_tilde = jnp.log1p(R / R0)
-    z_tilde = jnp.log1p(z / R0)
-    return R_tilde, z_tilde
-
-@jax.jit
-def _Rz_rescale_inverse(R_tilde, z_tilde, R0):
-    """
-    Forward map:
-        R̃ = ln(1 + R/R0)
-        z̃ = ln(1 + z/R0)
-    Works with scalars or arrays.
-    """
-    R = R0 * jnp.expm1(R_tilde)
-    z = R0 * jnp.expm1(z_tilde)
-    return R, z
-
-@jax.jit
-def m_wrapper(m, R0, z0, Rp, zp, R, Z_nonneg, rho_real, rho_img, Mx_real, My_real, Mx_img, My_img, R_scale, Jmap, W2D):
-    rho_grid = jax_rho_m_eval(m.astype(int), Rp, zp, R, Z_nonneg, rho_real, rho_img, Mx_real, My_real, Mx_img, My_img, R_scale)
+def m_wrapper(m, R0, z0, Rp, zp, R, Z_nonneg, rho_real, rho_img, Mx_real, My_real, Mx_img, My_img, Jmap, W2D):
+    rho_grid = jax_rho_m_eval(m.astype(int), Rp, zp, R, Z_nonneg, rho_real, rho_img, Mx_real, My_real, Mx_img, My_img)
 
     return jax.vmap(R_wrapper, in_axes=(None, 0, None, None, None, None, None, None))(m, R0, z0, Rp, zp, rho_grid, Jmap, W2D)
 
@@ -275,17 +250,11 @@ def get_phi_m(rho_fn, params, NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax, Nphi, N_int)
     Zpos = jnp.geomspace(jnp.maximum(Zmin, 1e-3), Zmax, NZ)
     Z_nonneg = jnp.concatenate([jnp.array([0.0]), Zpos])
 
-    R0 = R[NR//2]
-
     Rg, Zg = jnp.meshgrid(R, Z_nonneg, indexing="ij")
     phi = jnp.linspace(0.0, 2*jnp.pi, Nphi, endpoint=False)
 
     # rho_m = jax.vmap(compute_rho_m, in_axes=(0, 0, None, None, None, None))(Rg, Zg, M, phi, rho_fn, params).transpose(1,0,2) 
     rho_m = compute_rho_m(Rg, Zg, M, phi, rho_fn, params).transpose(2, 0 ,1) 
-
-    _R, _z = _Rz_rescale_forward(R, Z_nonneg, R0)
-
-    # print(Rg.shape, Zg.shape, _R.shape, _z.shape, rho_m.shape)
 
     rho_real = jnp.zeros((len(M), len(R), len(Z_nonneg)))
     rho_img = jnp.zeros((len(M), len(R), len(Z_nonneg)))
@@ -295,11 +264,11 @@ def get_phi_m(rho_fn, params, NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax, Nphi, N_int)
     My_img = jnp.zeros((len(M), len(R), len(Z_nonneg)))
     for m in M.astype(int):
         rho_real = rho_real.at[m].set(rho_m[m].real)
-        M_x, M_y = jax_precompute_splines((_R, _z), rho_m[m].real)
+        M_x, M_y = jax_precompute_splines((R, Z_nonneg), rho_m[m].real)
         Mx_real = Mx_real.at[m].set(M_x)
         My_real = My_real.at[m].set(M_y)
         rho_img = rho_img.at[m].set(rho_m[m].imag)
-        M_x, M_y = jax_precompute_splines((_R, _z), rho_m[m].imag)
+        M_x, M_y = jax_precompute_splines((R, Z_nonneg), rho_m[m].imag)
         Mx_img = Mx_img.at[m].set(M_x)
         My_img = My_img.at[m].set(M_y)
 
@@ -317,8 +286,8 @@ def get_phi_m(rho_fn, params, NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax, Nphi, N_int)
     Rp, zp, Jmap = _xieta_to_Rz_jacobian(XI, ETA, jnp.array([R[1], Rmax, Z_nonneg[1], Zmax])) 
     W2D = jnp.einsum('i,j->ij', wxi, weta)
 
-    phi_m = jax.vmap(m_wrapper, in_axes=(0, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None)) \
-                (M.astype(int), R, Z_nonneg, Rp, zp, _R, _z, rho_real, rho_img, Mx_real, My_real, Mx_img, My_img, R0, Jmap, W2D)
+    phi_m = jax.vmap(m_wrapper, in_axes=(0, None, None, None, None, None, None, None, None, None, None, None, None, None, None)) \
+                (M.astype(int), R, Z_nonneg, Rp, zp, R, Z_nonneg, rho_real, rho_img, Mx_real, My_real, Mx_img, My_img, Jmap, W2D)
 
     phi_real = jnp.zeros((len(M), len(R), len(Z_nonneg)))
     phi_img = jnp.zeros((len(M), len(R), len(Z_nonneg)))
@@ -328,18 +297,17 @@ def get_phi_m(rho_fn, params, NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax, Nphi, N_int)
     phi_My_img = jnp.zeros((len(M), len(R), len(Z_nonneg)))
     for m in M.astype(int):
         phi_real = phi_real.at[m].set(phi_m[m].real)
-        M_x, M_y = jax_precompute_splines((_R, _z), phi_m[m].real)
+        M_x, M_y = jax_precompute_splines((R, Z_nonneg), phi_m[m].real)
         phi_Mx_real = phi_Mx_real.at[m].set(M_x)
         phi_My_real = phi_My_real.at[m].set(M_y)
         phi_img = phi_img.at[m].set(phi_m[m].imag)
-        M_x, M_y = jax_precompute_splines((_R, _z), phi_m[m].imag)
+        M_x, M_y = jax_precompute_splines((R, Z_nonneg), phi_m[m].imag)
         phi_Mx_img = phi_Mx_img.at[m].set(M_x)
         phi_My_img = phi_My_img.at[m].set(M_y)
 
     Phi_m_grid = {
-        'Rgrid': _R,
-        'Zgrid': _z,
-        'R0': jnp.array([R0]),
+        'Rgrid': R,
+        'Zgrid': Z_nonneg,
         'm': M,
         'Phi_m_real': phi_real,
         'Phi_m_img': phi_img,
@@ -363,11 +331,9 @@ def evaluate_phi(x, y, z, dict_phi_m):
         M_y_real    = dict_phi_m['My_real'][m]
         M_x_imag    = dict_phi_m['Mx_img'][m]
         M_y_imag    = dict_phi_m['My_img'][m]
-        R0 = dict_phi_m['R0'][0]
 
         shape = R.shape
-        _R, _z = _Rz_rescale_forward(R, jnp.abs(z), R0)
-        pts = jnp.column_stack((_R.ravel(), _z.ravel()))
+        pts = jnp.column_stack((R.ravel(), jnp.abs(z).ravel()))
 
         real_part = cubic_spline_evaluate(pts, (dict_phi_m['Rgrid'], dict_phi_m['Zgrid']), real_values, M_x_real, M_y_real, fill_value=0.0).reshape(shape)
         imag_part = cubic_spline_evaluate(pts, (dict_phi_m['Rgrid'], dict_phi_m['Zgrid']), imag_values, M_x_imag, M_y_imag, fill_value=0.0).reshape(shape)
