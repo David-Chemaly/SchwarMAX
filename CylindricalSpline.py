@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import numpy as np
 import pickle
 from constants import *
-from CubicSpline import *
+from QuinticSpline import *
 from functools import partial
 
 @jax.jit

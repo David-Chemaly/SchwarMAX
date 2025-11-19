@@ -32,7 +32,7 @@ def _rotate(vec, p):
 @jax.jit
 def MiyamotoNagai_density(x, y, z, params):
     '''
-    params: dict with keys 'logM', 'a', 'b', 'x_origin', 'y_origin', 'z_origin', 'dirx', 'diry', 'dirz'
+    params: dict with keys 'logM', 'Rs', 'Hs', 'x_origin', 'y_origin', 'z_origin', 'dirx', 'diry', 'dirz'
     '''
     # Shift and rotate coordinates
     rin = _shift(x, y, z, params)       # (3, ...)
@@ -43,13 +43,13 @@ def MiyamotoNagai_density(x, y, z, params):
     R = jnp.sqrt(rx**2 + ry**2)
 
     # Vertical scale height uses rz (IMPORTANT FIX)
-    beta = jnp.sqrt(rz**2 + params["b"]**2)
+    beta = jnp.sqrt(rz**2 + params["Hs"]**2)
 
-    D2 = R*R + (params["a"] + beta)**2
-    num = params["a"] * R*R + (params["a"] + 3.0*beta) * (params["a"] + beta)**2
+    D2 = R*R + (params["Rs"] + beta)**2
+    num = params["Rs"] * R*R + (params["Rs"] + 3.0*beta) * (params["Rs"] + beta)**2
     den = beta**3 * D2**2.5
 
-    return (params["b"]**2 * 10.0**params["logM"] / (4 * jnp.pi)) * (num / den)
+    return (params["Hs"]**2 * 10.0**params["logM"] / (4 * jnp.pi)) * (num / den)
 
 # ---------- Double Exponential Disk ----------
 @jax.jit
