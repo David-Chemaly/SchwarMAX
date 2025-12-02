@@ -1,19 +1,9 @@
 import jax
 import jax.numpy as jnp
 
-from utils import get_mat
+from utils import *
 
 from constants import G, EPSILON
-
-# ---------- helpers ----------
-@jax.jit
-def _shift(x, y, z, p):
-    return jnp.array([x - p['x_origin'], y - p['y_origin'], z - p['z_origin']])
-
-@jax.jit
-def _rotate(vec, p):
-    R = get_mat(p['dirx'], p['diry'], p['dirz'])
-    return R @ vec  # matvec
 
 # ---------- (Triaxial) NFW ----------
 # Phi = - G M / r * log(1 + r/Rs),  r = sqrt((rx/a)^2 + (ry/b)^2 + (rz/c)^2)
@@ -22,8 +12,8 @@ def NFW_potential(x, y, z, params):
     '''
     params: dict with keys 'logM', 'Rs', 'a', 'b', 'c', 'x_origin', 'y_origin', 'z_origin', 'dirx', 'diry', 'dirz'
     '''
-    rin = _shift(x, y, z, params)
-    rvec = _rotate(rin, params)  
+    rin = shift_origin(x, y, z, params)
+    rvec = rotate_zaxis(rin, params)  
     rx, ry, rz = rvec
     r = jnp.sqrt((rx/params['a'])**2 + (ry/params['b'])**2 + (rz/params['c'])**2 + EPSILON)
     return -G * 10**params['logM'] * jnp.log(1 + r / params['Rs']) / (r + EPSILON)  # kpc^2 / Gyr^2
@@ -49,8 +39,8 @@ def MiyamotoNagai_potential(x, y, z, params):
     '''
     params: dict with keys 'logM', 'Rs', 'Hs', 'x_origin', 'y_origin', 'z_origin', 'dirx', 'diry', 'dirz'
     '''
-    rin  = _shift(x, y, z, params)
-    rvec = _rotate(rin, params)  
+    rin  = shift_origin(x, y, z, params)
+    rvec = rotate_zaxis(rin, params)  
     rx, ry, rz = rvec + EPSILON
 
     R = (rx**2 + ry**2)**0.5
@@ -86,8 +76,8 @@ def Bar_potential(x, y, z, params):
     '''
     params: dict with keys 'A', 'Rs', 'Hs', 'Omega', 't', 't0', 't1', 'x_origin', 'y_origin', 'z_origin', 'dirx', 'diry', 'dirz'
     '''
-    rin  = _shift(x, y, z, params)
-    rvec = _rotate(rin, params)
+    rin  = shift_origin(x, y, z, params)
+    rvec = rotate_zaxis(rin, params)
     rx, ry, rz = rvec + EPSILON
 
     R   = jnp.sqrt(rx**2 + ry**2)

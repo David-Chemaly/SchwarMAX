@@ -1,30 +1,10 @@
 import jax
 import jax.numpy as jnp
 
-from utils import get_mat
+from utils import *
 
 from constants import EPSILON
 
-# ---------- helpers ----------
-def _shift(x, y, z, p):
-    # Convert scalar params to arrays matching x,y,z shape
-    x0 = jnp.asarray(p["x_origin"])
-    y0 = jnp.asarray(p["y_origin"])
-    z0 = jnp.asarray(p["z_origin"])
-
-    # Broadcast to match shapes of inputs
-    x0 = jnp.broadcast_to(x0, x.shape)
-    y0 = jnp.broadcast_to(y0, y.shape)
-    z0 = jnp.broadcast_to(z0, z.shape)
-
-    # Stack as a 3-vector field
-    return jnp.stack([x - x0, y - y0, z - z0], axis=0)
-
-def _rotate(vec, p):
-    # vec: (3, ...)
-    R = get_mat(p["dirx"], p["diry"], p["dirz"])  # (3,3)
-    # Tensordot over axis: (i,a) * (a,...) -> (i,...)
-    return jnp.tensordot(R, vec, axes=[[1],[0]])
 
 # ---------- Miyamoto-Nagai Disk ----------
 # rho = (b^2 M / 4π) * [ a R^2 + (a + 3β)(a + β)^2 ] / [ β^3 * (R^2 + (a + β)^2)^(5/2) ] 
@@ -35,8 +15,8 @@ def MiyamotoNagai_density(x, y, z, params):
     params: dict with keys 'logM', 'Rs', 'Hs', 'x_origin', 'y_origin', 'z_origin', 'dirx', 'diry', 'dirz'
     '''
     # Shift and rotate coordinates
-    rin = _shift(x, y, z, params)       # (3, ...)
-    rvec = _rotate(rin, params)         # (3, ...)
+    rin = shift_origin(x, y, z, params)       # (3, ...)
+    rvec = rotate_zaxis(rin, params)         # (3, ...)
     rx, ry, rz = rvec + EPSILON
 
     # Cylindrical R in rotated frame
@@ -56,8 +36,8 @@ def MiyamotoNagai_density(x, y, z, params):
 def DoubleExponentialDisk_density(x, y, z, params):
     """Volume density for a simple exponential disc: rho(R,z) = (Sigma0/(2hz)) e^{-R/Rd} e^{-|z|/hz}."""
     # Shift and rotate coordinates
-    rin = _shift(x, y, z, params)       # (3, ...)
-    rvec = _rotate(rin, params)         # (3, ...)
+    rin = shift_origin(x, y, z, params)       # (3, ...)
+    rvec = rotate_zaxis(rin, params)         # (3, ...)
     rx, ry, rz = rvec + EPSILON
 
     # Cylindrical R in rotated frame
@@ -73,8 +53,8 @@ def FerrersBar_density(x, y, z, params):
     The bar major axis a is rotated in the XY plane by phi_bar (radians) from +x.
     """
     # Shift and rotate coordinates
-    rin = _shift(x, y, z, params)       # (3, ...)
-    rvec = _rotate(rin, params)         # (3, ...)
+    rin = shift_origin(x, y, z, params)       # (3, ...)
+    rvec = rotate_zaxis(rin, params)         # (3, ...)
     rx, ry, rz = rvec + EPSILON
 
     cp, sp = jnp.cos(params['phi_bar']), jnp.sin(params['phi_bar'])
