@@ -48,7 +48,7 @@ def go_to_bar_ref(xv, angle):
     return xv.at[0].set(x_new).at[1].set(y_new).at[3].set(vx_new).at[4].set(vy_new)
 
 @partial(jax.jit, static_argnames=('xlim', 'ylim', 'zlim', 'dx', 'dy', 'dz'))
-def histogram3d(x, weights=None, xlim=(-10, 10), ylim=(-10, 10), zlim=(-3, 3), dx=1.0, dy=1.0, dz=1.0):
+def histogram3d(x, weights, xlim=(-10, 10), ylim=(-10, 10), zlim=(-3, 3), dx=1.0, dy=1.0, dz=1.0):
     # Define bin edges for each dimension
     x_bins = jnp.arange(xlim[0], xlim[1] + dx, dx)
     y_bins = jnp.arange(ylim[0], ylim[1] + dy, dy)

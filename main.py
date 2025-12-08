@@ -163,7 +163,6 @@ def model(params_halo_pot, params_disk_rho, dict_data):
 
     return vr_binned, sigmavr_binned, vphi_binned, sigmavphi_binned, vz_binned, sigmavz_binned
 
-
 @jax.jit
 def _nll_z(z, A, y, sig, l2):
     x = jnn.softplus(z)  # strictly positive
