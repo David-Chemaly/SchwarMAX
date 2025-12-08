@@ -136,7 +136,7 @@ def model(params_halo_pot, params_disk_rho, dict_data):
     initial_time = 0.0
 
     time, xv = jax.vmap(integrate_leapfrog_traj, in_axes=(0, None, None, None, None, None))(dict_data['w0'], acc_fn, n_steps, dt, initial_time, unroll)
-    density_model = jax.vmap(histogram3d)(xv[:, :, :3])
+    density_model = jax.vmap(histogram3d)(xv[:, :, :3], None)
 
     A = density_model.reshape(len(xv), -1).T.astype(jnp.float32)/n_steps
     y = dict_data['density_data'].reshape(-1).astype(jnp.float32)
@@ -171,7 +171,7 @@ def _nll_z(z, A, y, sig, l2):
 _nll_z = jax.value_and_grad(_nll_z)
 
 @jax.jit
-def solve_lbfgs_softplus(A, y, sigma, l2=1e-3, maxiter=500, tol=1e-6):
+def solve_lbfgs_softplus(A, y, sigma, l2=1e-3, maxiter=200, tol=1e-6):
     z0 = jnp.zeros(A.shape[1], A.dtype)
     solver = jaxopt.LBFGS(fun=_nll_z, value_and_grad=True, maxiter=maxiter, tol=tol)
     res = solver.run(z0, A, y, sigma, l2)
@@ -182,16 +182,18 @@ if __name__ == "__main__":
     #Hyperparameters for dynesty
     ndim = 5
     nlive = 500
-    PATH_DATA = f'/data/dc824-2/ScharMAX_first_tests'
+    n_particles = 10_000
+    PATH_DATA = f'/data/dc824-2/ScharMAX_first_tests_nlive{nlive}_N{n_particles}'
 
     with open('./IC_axisymmetric_disc.pkl', 'rb') as f:
         ic = pickle.load(f)
-    w0 = jnp.array([ic['x'], ic['y'], ic['z'], ic['vx'], ic['vy'], ic['vz']]).T
+    index = np.random.choice(n_particles, size=n_particles, replace=False)
+    w0 = jnp.array([ic['x'][index], ic['y'][index], ic['z'][index], ic['vx'][index], ic['vy'][index], ic['vz'][index]]).T
 
     with open('./axisymmetric_disc.pkl', 'rb') as f:
         data = pickle.load(f)
     w0_data = jnp.array([data['x'], data['y'], data['z'], data['vx'], data['vy'], data['vz']]).T
-    density_data = histogram3d(w0_data[:, :3])
+    density_data = histogram3d(w0_data[:, :3], None)
 
     r_data    = jnp.linalg.norm(w0_data[:, :2], axis=-1)
     vr_data   = (w0_data[:, 0] * w0_data[:, 3] + w0_data[:, 1] * w0_data[:, 4]) / r_data
