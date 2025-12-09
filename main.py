@@ -130,7 +130,7 @@ def model(params_halo_pot, params_disk_rho, dict_data):
         return a_halo + a_disk
 
     time = 2. #Gyr
-    n_steps = 1000
+    n_steps = 100
     dt = time / n_steps
     unroll = False
     initial_time = 0.0
