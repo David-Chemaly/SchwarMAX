@@ -386,11 +386,69 @@ def evaluate_phi(x, y, z, dict_phi_m):
     return jnp.sum(phi_grid, axis=0)
 
 @jax.jit
-def get_acc(x, y, z, params):
-    def potential_vec(pos):
+def evaluate_phi_axisymmetric(x, y, z, dict_phi_m):
+
+    m = 0
+    R, ph = jnp.sqrt(x*x + y*y), jnp.arctan2(y, x)
+    real_values = dict_phi_m['Phi_m_real'][m]
+    imag_values = dict_phi_m['Phi_m_img'][m]
+    M_x_real    = dict_phi_m['Mx_real'][m]
+    M_y_real    = dict_phi_m['My_real'][m]
+    M_x_imag    = dict_phi_m['Mx_img'][m]
+    M_y_imag    = dict_phi_m['My_img'][m]
+    R0 = dict_phi_m['R0'][0]
+
+    shape = R.shape
+    _R, _z = _Rz_rescale_forward(R, jnp.abs(z), R0)
+    pts = jnp.column_stack((_R.ravel(), _z.ravel()))
+
+    real_part = cubic_spline_evaluate(pts, (dict_phi_m['Rgrid'], dict_phi_m['Zgrid']), real_values, M_x_real, M_y_real, fill_value=0.0).reshape(shape)
+    imag_part = cubic_spline_evaluate(pts, (dict_phi_m['Rgrid'], dict_phi_m['Zgrid']), imag_values, M_x_imag, M_y_imag, fill_value=0.0).reshape(shape)
+
+    phi_m = real_part + 1j * imag_part
+
+    val = (phi_m.real * jnp.cos(m*ph) - phi_m.imag * jnp.sin(m*ph))
+
+    val_final = jax.lax.cond(m==0, lambda: val, lambda: val*2)
+    
+    return val_final
+
+
+
+# @jax.jit
+# def get_acc(x, y, z, params):
+#     def potential_vec(pos):
+#         return evaluate_phi(pos[0], pos[1], pos[2], params)
+#     grad_phi = jax.grad(potential_vec)(jnp.array([x, y, z]))
+#     return -grad_phi
+
+@jax.jit
+def get_acc(x, y, z, params, eps=5e-4):
+    """Return acceleration = -∇phi using central finite differences."""
+    def phi(pos):
         return evaluate_phi(pos[0], pos[1], pos[2], params)
-    grad_phi = jax.grad(potential_vec)(jnp.array([x, y, z]))
-    return -grad_phi
+
+    # 6 nearby positions for central differences
+    base = jnp.array([x, y, z])
+    shifts = jnp.array([
+        [ eps, 0.0, 0.0],
+        [-eps, 0.0, 0.0],
+        [0.0,  eps, 0.0],
+        [0.0,-eps, 0.0],
+        [0.0, 0.0,  eps],
+        [0.0, 0.0,-eps],
+    ])
+    pts = base + shifts
+
+    # compute phi at the 6 shifted points
+    phi_vals = jax.vmap(phi)(pts)
+
+    dphidx = (phi_vals[0] - phi_vals[1]) / (2 * eps)
+    dphidy = (phi_vals[2] - phi_vals[3]) / (2 * eps)
+    dphidz = (phi_vals[4] - phi_vals[5]) / (2 * eps)
+
+    acc = -jnp.array([dphidx, dphidy, dphidz])
+    return acc
 
 @jax.jit
 def get_hessian(x, y, z, params):

@@ -48,11 +48,32 @@ def go_to_bar_ref(xv, angle):
     return xv.at[0].set(x_new).at[1].set(y_new).at[3].set(vx_new).at[4].set(vy_new)
 
 @partial(jax.jit, static_argnames=('xlim', 'ylim', 'zlim', 'dx', 'dy', 'dz'))
-def histogram3d(x, xlim=(-10, 10), ylim=(-10, 10), zlim=(-3, 3), dx=1.0, dy=1.0, dz=1.0):
+def histogram3d(x, weights, xlim=(-10, 10), ylim=(-10, 10), zlim=(-3, 3), dx=1.0, dy=1.0, dz=1.0):
     # Define bin edges for each dimension
     x_bins = jnp.arange(xlim[0], xlim[1] + dx, dx)
     y_bins = jnp.arange(ylim[0], ylim[1] + dy, dy)
     z_bins = jnp.arange(zlim[0], zlim[1] + dz, dz)
 
-    bins, _ = jnp.histogramdd(x, bins=[x_bins, y_bins, z_bins])
+    bins, _ = jnp.histogramdd(x, bins=[x_bins, y_bins, z_bins], weights=weights)
     return bins
+
+# ---------- helpers ----------
+def shift_origin(x, y, z, p):
+    # Convert scalar params to arrays matching x,y,z shape
+    x0 = jnp.asarray(p["x_origin"])
+    y0 = jnp.asarray(p["y_origin"])
+    z0 = jnp.asarray(p["z_origin"])
+
+    # Broadcast to match shapes of inputs
+    x0 = jnp.broadcast_to(x0, x.shape)
+    y0 = jnp.broadcast_to(y0, y.shape)
+    z0 = jnp.broadcast_to(z0, z.shape)
+
+    # Stack as a 3-vector field
+    return jnp.stack([x - x0, y - y0, z - z0], axis=0)
+
+def rotate_zaxis(vec, p):
+    # vec: (3, ...)
+    R = get_mat(p["dirx"], p["diry"], p["dirz"])  # (3,3)
+    # Tensordot over axis: (i,a) * (a,...) -> (i,...)
+    return jnp.tensordot(R, vec, axes=[[1],[0]])

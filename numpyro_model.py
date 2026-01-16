@@ -56,7 +56,8 @@ class numpyro_model(object):
         numpyro.factor('log_likelihood', self.lnL(params, self.data))
         
     def run_mcmc(self, num_warmup=100, num_samples=300, num_chains=1, init_strategy=numpyro.infer.init_to_sample(),
-                 max_tree_depth=10, chain_method="vectorized"):
+                 max_tree_depth=10, target_accept_prob=0.8, step_size=1., chain_method="vectorized", 
+                 adapt_step_size=True, jit_model_args = False, extra_fields = ()):
         """
         Run the MCMC sampler.
 
@@ -77,9 +78,15 @@ class numpyro_model(object):
         """
         self.mcmc = numpyro.infer.MCMC(numpyro.infer.NUTS(self.__call__, 
                                                           init_strategy=init_strategy,
-                                                          max_tree_depth=max_tree_depth), 
+                                                          max_tree_depth=max_tree_depth,
+                                                          adapt_step_size=adapt_step_size,
+                                                          target_accept_prob=target_accept_prob,
+                                                          step_size = step_size,), 
                                        num_warmup=num_warmup, num_samples=num_samples,
-                                       num_chains=num_chains, chain_method=chain_method)
+                                       num_chains=num_chains, chain_method=chain_method,
+                                       progress_bar = True,
+                                        jit_model_args = jit_model_args)
+        # self.mcmc.run(jax.random.PRNGKey(4567), extra_fields=extra_fields)
         self.mcmc.run(jax.random.PRNGKey(0))
         
     def samples(self):
