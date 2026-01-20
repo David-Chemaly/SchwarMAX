@@ -75,6 +75,48 @@ def gauss_hermite_coefficients(v, weights, v0, s):
 
 
 @jax.jit
+def h_to_V_sigma(h1, h2, v0, s):
+    """
+    Convert h1, h2 to actual mean and sigma of the distribution.
+    
+    Parameters
+    ----------
+    h1, h2 : Gauss-Hermite coefficients
+    v0 : reference velocity
+    s : reference dispersion
+    
+    Returns
+    -------
+    v_mean, sigma : actual mean and standard deviation
+    """
+    v_mean = v0 + s * h1
+    sigma = s * jnp.sqrt(jnp.clip(1 + jnp.sqrt(2)*h2 - h1**2, 1e-10))
+    
+    return v_mean, sigma
+
+@jax.jit
+def mean_sigma_to_h1h2(V_mean, sigma, v0, s):
+    """
+    Convert mean and sigma to h1 and h2.
+    
+    Parameters
+    ----------
+    V_mean : array or scalar - actual mean velocity
+    sigma : array or scalar - actual velocity dispersion
+    v0 : array or scalar - reference velocity
+    s : array or scalar - reference dispersion
+    
+    Returns
+    -------
+    h1, h2 : Gauss-Hermite coefficients
+    """
+    h1 = (V_mean - v0) / s
+    h2 = (sigma**2 / s**2 + h1**2 - 1) / jnp.sqrt(2)
+    
+    return h1, h2
+
+
+@jax.jit
 def reconstruct_gh_distribution(v, v0, s, h1, h2, h3, h4):
     """
     Reconstruct velocity distribution from Gauss-Hermite coefficients.

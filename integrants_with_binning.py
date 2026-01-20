@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 from functools import partial
-from ghmoments import gauss_hermite_coefficients_binned
+from constants import *
 
 def _split(w):
     return w[:3], w[3:]
@@ -9,8 +9,8 @@ def _split(w):
 def _merge(r, v):
     return jnp.concatenate([r, v], axis=0)
 
-@jax.jit
-def grid_Rzphi(R_min=0, R_max=10, z_min=-3, z_max=3, n_R=10, n_z=6, n_phi=6):
+@partial(jax.jit, static_argnames=('n_R', 'n_z', 'n_phi'))
+def grid_Rzphi(R_min=0., R_max=10., z_min=-3., z_max=3., n_R=10, n_z=6, n_phi=6):
     """ Create a grid in cylindrical coordinates (R, z, phi) """
     R_mids = jnp.linspace(R_min, R_max, n_R)
     z_mids = jnp.linspace(z_min, z_max, n_z)
@@ -19,7 +19,7 @@ def grid_Rzphi(R_min=0, R_max=10, z_min=-3, z_max=3, n_R=10, n_z=6, n_phi=6):
 
     return R_mids, z_mids, phi_mids, dR, dz, dphi
 
-@jax.jit
+@partial(jax.jit, static_argnames=('n_X', 'n_Y', 'n_Vlos'))
 def grid_XYVlos(Xmin, Xmax, Ymin, Ymax, Vlos_min, Vlos_max, n_X = 40, n_Y = 30, n_Vlos = 50):
     """ Create a grid in observed coordinates (X, Y, Vlos) """
     X_mids = jnp.linspace(Xmin, Xmax, n_X)
@@ -114,13 +114,18 @@ def integrate_leapfrog_traj(w0, acc_fn, n_steps, dt = 0.010, t0 = 0.0, unroll=Tr
     return tN, wN 
 
 
-@partial(jax.jit, static_argnames=('acc_fn', 'n_steps', 'unroll'))
+@partial(jax.jit, static_argnames=('acc_fn', 'n_steps', 'unroll', 'num_segments_Rzphi', 'num_segments_XY'))
 def integrate_leapfrog_grid(w0, acc_fn, n_steps, dt = 0.010, t0 = 0.0, unroll=True, 
-                            Rz_minmax=jnp.array([[0,10.],[-3,3]]), XY_minmax=jnp.array([[-10.,10.],[-10.,10.]]),
-                            nRzphi=jnp.array([10,6,6]), nXY=jnp.array([40,30]),
+                            Rzphi_minmax=jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]]), XY_minmax=jnp.array([[-10.,10.],[-2.,2.]]),
+                            nRzphi=jnp.array([10,6,6]), nXY=jnp.array([40,30]), num_segments_Rzphi=360, num_segments_XY=1200,
                             v0 = jnp.zeros(1200), s= jnp.ones(1200) * 100.0
                             ):
     """Leapfrog (KDK) — returns final time and final state only.
+
+    num_segments_Rzphi: int
+        Number of segments for Rzphi bin counting. MUST equal to nRzphi.prod()
+    num_segments_XY: int
+        Number of segments for XY bin counting. MUST equal to nXY.prod()
     
     v0 and s are arrays of reference velocity and dispersion for each XY cell for the GH coefficent calculation. Length should equal to nXY.prod()
     """
@@ -149,12 +154,13 @@ def integrate_leapfrog_grid(w0, acc_fn, n_steps, dt = 0.010, t0 = 0.0, unroll=Tr
 
     Rzphi_strides = jnp.concatenate([jnp.array([1]), jnp.cumprod(nRzphi[:-1])])
     Rzphi_indices = assign_regular_grid(Rzphi,
-                                        grid_min=Rz_minmax[:,0],
-                                        grid_max=Rz_minmax[:,1],
+                                        grid_min=Rzphi_minmax[:,0],
+                                        grid_max=Rzphi_minmax[:,1],
                                         n_bins=nRzphi,
                                         strides=Rzphi_strides)
 
-    Rzphi_bin_counts = jax.ops.segment_sum(jnp.ones_like(Rzphi_indices), Rzphi_indices, num_segments=nRzphi.prod())
+    # jax.debug.print("Rzphi_indices: {Rzphi_indices}", Rzphi_indices=Rzphi_indices)
+    Rzphi_bin_counts = jax.ops.segment_sum(jnp.ones_like(Rzphi_indices), Rzphi_indices, num_segments=num_segments_Rzphi)
     
     XY_strdides = jnp.concatenate([jnp.array([1]), jnp.cumprod(nXY[:-1])])
     XY_indices = assign_regular_grid(XY,
@@ -163,7 +169,6 @@ def integrate_leapfrog_grid(w0, acc_fn, n_steps, dt = 0.010, t0 = 0.0, unroll=Tr
                                     n_bins=nXY,
                                     strides=XY_strdides)
     
-    N_XY_constraints = nXY.prod()
     # ==========================================================================
     # Compute Gauss-Hermite coefficients in each XY cell
 
@@ -172,13 +177,12 @@ def integrate_leapfrog_grid(w0, acc_fn, n_steps, dt = 0.010, t0 = 0.0, unroll=Tr
 
     vy = wN[:,4]
     w = (vy - v0_cell) / s_cell # (v_los - v0) / s, where in edge-on case v_los = vy = wN[:,4]
-    counts = jax.ops.segment_sum(jnp.ones_like(vy), XY_indices, num_segments=N_XY_constraints)
-    sum_w1 = jax.ops.segment_sum(w, XY_indices, num_segments=N_XY_constraints)
-    sum_w2 = jax.ops.segment_sum(w**2, XY_indices, num_segments=N_XY_constraints)
-    sum_w3 = jax.ops.segment_sum(w**3, XY_indices, num_segments=N_XY_constraints)
-    sum_w4 = jax.ops.segment_sum(w**4, XY_indices, num_segments=N_XY_constraints)
-
-    eps = 1e-10
+    counts = jax.ops.segment_sum(jnp.ones_like(vy), XY_indices, num_segments=num_segments_XY)
+    sum_w1 = jax.ops.segment_sum(w, XY_indices, num_segments=num_segments_XY)
+    sum_w2 = jax.ops.segment_sum(w**2, XY_indices, num_segments=num_segments_XY)
+    sum_w3 = jax.ops.segment_sum(w**3, XY_indices, num_segments=num_segments_XY)
+    sum_w4 = jax.ops.segment_sum(w**4, XY_indices, num_segments=num_segments_XY)
+    eps = EPSILON
     norm = counts + eps
     w1 = sum_w1 / norm
     w2 = sum_w2 / norm

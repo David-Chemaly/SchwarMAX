@@ -77,3 +77,23 @@ def rotate_zaxis(vec, p):
     R = get_mat(p["dirx"], p["diry"], p["dirz"])  # (3,3)
     # Tensordot over axis: (i,a) * (a,...) -> (i,...)
     return jnp.tensordot(R, vec, axes=[[1],[0]])
+
+@jax.jit
+def getCartesianFromCylindrical_clockwise(R, phi, vR, vphi):
+    """
+    Reverts R, phi, vR, vphi back to Cartesian x, y, vx, vy.
+    Consistent with the 'clockwise' vphi convention provided.
+    """
+    cos_phi = jnp.cos(phi)
+    sin_phi = jnp.sin(phi)
+    
+    # 1. Positions
+    x = R * cos_phi
+    y = R * sin_phi
+    
+    # 2. Velocities
+    # Derived by inverting the linear system from your input function
+    vx = vR * cos_phi + vphi * sin_phi
+    vy = vR * sin_phi - vphi * cos_phi
+    
+    return x, y, vx, vy
