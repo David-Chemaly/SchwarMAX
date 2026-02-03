@@ -33,7 +33,7 @@ from densities import MiyamotoNagai_density
 
 from CylindricalSpline import get_phi_m, get_acc, evaluate_phi_axisymmetric
 
-path = '/home/hz420/python_script/SchwarMAX/'
+path = '../SchwarMAX/'
 # path = '/content/drive/MyDrive/SchwarMAX/'
 
 @jax.jit
@@ -653,91 +653,90 @@ def logl(params, dict_data, num_Vbin):
 ###########################################################################################################
 ###########################################################################################################
 
-df_ic = pd.read_csv(path + 'mock_initial_conditions_xyz.csv')
-df_ic = df_ic[np.sqrt(df_ic['x']**2 + df_ic['y']**2) < 10.0]
-df_ic = df_ic[np.fabs(df_ic['z']) < 3.0]
+if __name__ == '__main__':
+    df_ic = pd.read_csv(path + 'mock_initial_conditions_xyz.csv')
+    df_ic = df_ic[np.sqrt(df_ic['x']**2 + df_ic['y']**2) < 10.0]
+    df_ic = df_ic[np.fabs(df_ic['z']) < 3.0]
 
-n_particles =  20_000
+    n_particles =  20_000
+    print(n_particles)
+    np.random.seed(42)
+    index = np.random.choice(len(df_ic['x']), size=n_particles, replace=False)
+    df_ic = df_ic.iloc[index]
+    # w0 = jnp.array([df_ic['x'], df_ic['y'], df_ic['z'], df_ic['vx'], df_ic['vy'], df_ic['vz']]).T
+    w0 = jnp.array(df_ic[['x','y','z']].to_numpy())
 
-print(n_particles)
-np.random.seed(42)
-index = np.random.choice(len(df_ic['x']), size=n_particles, replace=False)
-df_ic = df_ic.iloc[index]
-# w0 = jnp.array([df_ic['x'], df_ic['y'], df_ic['z'], df_ic['vx'], df_ic['vy'], df_ic['vz']]).T
-w0 = jnp.array(df_ic[['x','y','z']].to_numpy())
+    with open(path + 'mock_axisymmetric_disc_XY_voronoi.pkl', 'rb') as f:
+        bin_dict = pickle.load(f)
 
+    # regular grid parameters
+    nX, nY = bin_dict['nX_nY']
+    X_min, X_max = bin_dict['X_minmax']
+    Y_min, Y_max = bin_dict['Y_minmax']
+    X_regular_grid = bin_dict['X_regular_grid']
+    Y_regular_grid = bin_dict['Y_regular_grid']
 
-with open(path + 'mock_axisymmetric_disc_XY_voronoi.pkl', 'rb') as f:
-    bin_dict = pickle.load(f)
+    # voronoi binning mapping and data
+    xy_vbins = bin_dict['voronoi_bins_xy']
+    num_per_bin = jnp.array(bin_dict['num_per_bin'])
+    total_bins = jnp.array(bin_dict['total_bins'])
+    bin_mapping = jnp.array(bin_dict['bin_mapping'])
+    surface_density = jnp.array(bin_dict['surface_density'])
+    V_data = jnp.array(bin_dict['V_mean'])
+    sigma_data = jnp.array(bin_dict['V_sigma'])
+    h1_data = jnp.array(bin_dict['h1'])
+    h2_data = jnp.array(bin_dict['h2'])
+    h3_data = jnp.array(bin_dict['h3'])
+    h4_data = jnp.array(bin_dict['h4'])
+    v0 = jnp.array(bin_dict['v0'])
+    s = jnp.array(bin_dict['s'])
 
-# regular grid parameters
-nX, nY = bin_dict['nX_nY']
-X_min, X_max = bin_dict['X_minmax']
-Y_min, Y_max = bin_dict['Y_minmax']
-X_regular_grid = bin_dict['X_regular_grid']
-Y_regular_grid = bin_dict['Y_regular_grid']
+    V_data_err = jnp.where(0.1 * jnp.fabs(V_data) < 10, 10, 0.1 * V_data)
+    sigma_data_err = jnp.where(0.1 * jnp.fabs(sigma_data) < 5, 5, 0.1 * sigma_data)
+    h1_data_err = jnp.where(0.1 * jnp.fabs(h1_data) < 0.03, 0.03, 0.1 * jnp.fabs(h1_data))
+    h2_data_err = jnp.where(0.1 * jnp.fabs(h2_data) < 0.03, 0.03, 0.1 * jnp.fabs(h2_data))
+    h3_data_err = jnp.where(0.1 * jnp.fabs(h3_data) < 0.03, 0.03, 0.1 * jnp.fabs(h3_data))
+    h4_data_err = jnp.where(0.1 * jnp.fabs(h4_data) < 0.03, 0.03, 0.1 * jnp.fabs(h4_data))
 
-# voronoi binning mapping and data
-xy_vbins = bin_dict['voronoi_bins_xy']
-num_per_bin = jnp.array(bin_dict['num_per_bin'])
-total_bins = jnp.array(bin_dict['total_bins'])
-bin_mapping = jnp.array(bin_dict['bin_mapping'])
-surface_density = jnp.array(bin_dict['surface_density'])
-V_data = jnp.array(bin_dict['V_mean'])
-sigma_data = jnp.array(bin_dict['V_sigma'])
-h1_data = jnp.array(bin_dict['h1'])
-h2_data = jnp.array(bin_dict['h2'])
-h3_data = jnp.array(bin_dict['h3'])
-h4_data = jnp.array(bin_dict['h4'])
-v0 = jnp.array(bin_dict['v0'])
-s = jnp.array(bin_dict['s'])
-
-V_data_err = jnp.where(0.1 * jnp.fabs(V_data) < 10, 10, 0.1 * V_data)
-sigma_data_err = jnp.where(0.1 * jnp.fabs(sigma_data) < 5, 5, 0.1 * sigma_data)
-h1_data_err = jnp.where(0.1 * jnp.fabs(h1_data) < 0.03, 0.03, 0.1 * jnp.fabs(h1_data))
-h2_data_err = jnp.where(0.1 * jnp.fabs(h2_data) < 0.03, 0.03, 0.1 * jnp.fabs(h2_data))
-h3_data_err = jnp.where(0.1 * jnp.fabs(h3_data) < 0.03, 0.03, 0.1 * jnp.fabs(h3_data))
-h4_data_err = jnp.where(0.1 * jnp.fabs(h4_data) < 0.03, 0.03, 0.1 * jnp.fabs(h4_data))
-
-df_Rzphi_data = pd.read_csv(path + 'mock_axisymmetric_disc_Rzphi.csv')
-Rzphi_density_data = jnp.array(df_Rzphi_data['mass'].to_numpy()).astype(jnp.float32)
+    df_Rzphi_data = pd.read_csv(path + 'mock_axisymmetric_disc_Rzphi.csv')
+    Rzphi_density_data = jnp.array(df_Rzphi_data['mass'].to_numpy()).astype(jnp.float32)
 
 
-dict_data = {
-    'w0': w0,
-    'v0': v0,
-    's': s,
-    'Rzphi_density_data': Rzphi_density_data,
-    'XY_density_data': surface_density,
-    'V_data': V_data,
-    'V_data_err': V_data_err,
-    'sigma_data': sigma_data,
-    'sigma_data_err': sigma_data_err,
-    'h1_data': h1_data,
-    'h1_data_err': h1_data_err,
-    'h2_data': h2_data,
-    'h2_data_err': h2_data_err,
-    'h3_data': h3_data,
-    'h3_data_err': h3_data_err,
-    'h4_data': h4_data,
-    'h4_data_err': h4_data_err,
-    'num_per_bin': num_per_bin,
-    'bin_mapping': bin_mapping,
-    'total_bins': total_bins.item()
-}
+    dict_data = {
+        'w0': w0,
+        'v0': v0,
+        's': s,
+        'Rzphi_density_data': Rzphi_density_data,
+        'XY_density_data': surface_density,
+        'V_data': V_data,
+        'V_data_err': V_data_err,
+        'sigma_data': sigma_data,
+        'sigma_data_err': sigma_data_err,
+        'h1_data': h1_data,
+        'h1_data_err': h1_data_err,
+        'h2_data': h2_data,
+        'h2_data_err': h2_data_err,
+        'h3_data': h3_data,
+        'h3_data_err': h3_data_err,
+        'h4_data': h4_data,
+        'h4_data_err': h4_data_err,
+        'num_per_bin': num_per_bin,
+        'bin_mapping': bin_mapping,
+        'total_bins': total_bins.item()
+    }
 
-with open(path + '/mock_axisymmetric_disc_potential_params.pkl', 'rb') as f:
-    gt_params = pickle.load(f)
+    with open(path + '/mock_axisymmetric_disc_potential_params.pkl', 'rb') as f:
+        gt_params = pickle.load(f)
 
-N = 20
-i = 9
-ground_truth = {
-        'logM_halo': gt_params['halo_params']['logM'].item() + (i-N/2)/10,
-        'logRs_halo': jnp.log10(gt_params['halo_params']['scaleRadius']).item(),
-        'logM_disk': gt_params['disc_params']['logM'].item(),
-        'logRs_disk': jnp.log10(gt_params['disc_params']['scaleRadius']).item(),
-        'logHs_disk': jnp.log10(gt_params['disc_params']['scaleHeight']).item(),
-}
+    N = 20
+    i = 9
+    ground_truth = {
+            'logM_halo': gt_params['halo_params']['logM'].item() + (i-N/2)/10,
+            'logRs_halo': jnp.log10(gt_params['halo_params']['scaleRadius']).item(),
+            'logM_disk': gt_params['disc_params']['logM'].item(),
+            'logRs_disk': jnp.log10(gt_params['disc_params']['scaleRadius']).item(),
+            'logHs_disk': jnp.log10(gt_params['disc_params']['scaleHeight']).item(),
+    }
 
-logL = logl(ground_truth, dict_data, dict_data['total_bins'])
-print(logL)
+    logL = logl(ground_truth, dict_data, dict_data['total_bins'])
+    print(logL)
