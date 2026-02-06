@@ -24,7 +24,7 @@ def get_dict_data(path):
     # w0 = jnp.array([df_ic['x'], df_ic['y'], df_ic['z'], df_ic['vx'], df_ic['vy'], df_ic['vz']]).T
     w0 = jnp.array(df_ic[['x','y','z']].to_numpy())
 
-    with open(path + 'mock_axisymmetric_disc_XY_voronoi.pkl', 'rb') as f:
+    with open(path + 'mock_axisymmetric_disc_XY_withRot.pkl', 'rb') as f:
         bin_dict = pickle.load(f)
 
     # voronoi binning mapping and data
@@ -40,6 +40,7 @@ def get_dict_data(path):
     h4_data = jnp.array(bin_dict['h4'])
     v0 = jnp.array(bin_dict['v0'])
     s = jnp.array(bin_dict['s'])
+    alpha, beta, gamma = bin_dict['orientation']
 
     V_data_err = jnp.where(0.1 * jnp.fabs(V_data) < 10, 10, 0.1 * V_data)
     sigma_data_err = jnp.where(0.1 * jnp.fabs(sigma_data) < 5, 5, 0.1 * sigma_data)
@@ -50,6 +51,18 @@ def get_dict_data(path):
 
     df_Rzphi_data = pd.read_csv(path + 'mock_axisymmetric_disc_Rzphi.csv')
     Rzphi_density_data = jnp.array(df_Rzphi_data['mass'].to_numpy()).astype(jnp.float32)
+    # with open(path + 'mock_axisymmetric_disc_Rzphi.pkl', 'rb') as f:
+    #     Rzphi_density_data = pickle.load(f)
+
+    # R_grid, z_grid, phi_grid = Rzphi_density_data['R_grid'], Rzphi_density_data['z_grid'], Rzphi_density_data['phi_grid']
+    # dR = np.unique(R_grid)[1] - np.unique(R_grid)[0]
+    # dz = np.unique(z_grid)[1] - np.unique(z_grid)[0]
+    # dphi = np.unique(phi_grid)[1] - np.unique(phi_grid)[0]
+    # sample_for_integration = Rzphi_density_data['sample_for_integration']
+    # Rzphi_density_data = jnp.array([
+    #         get_mass(R_grid[i], z_grid[i], phi_grid[i], dR, dz, dphi,
+    #                 dict_data['sample_for_integration']) for i in range(len(R_grid))
+    #     ]).astype(jnp.float32)
 
 
     dict_data = {
@@ -72,7 +85,14 @@ def get_dict_data(path):
         'h4_data_err': h4_data_err,
         'num_per_bin': num_per_bin,
         'bin_mapping': bin_mapping,
-        'total_bins': total_bins.item()
+        'total_bins': total_bins.item(),
+        # 'R_grid': R_grid,
+        # 'z_grid': z_grid,
+        # 'phi_grid': phi_grid,
+        # 'dR': dR,   
+        # 'dz': dz,
+        # 'dphi': dphi,
+        # 'sample_for_integration': sample_for_integration
     }
 
     return dict_data

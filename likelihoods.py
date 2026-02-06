@@ -7,6 +7,30 @@ from main import model
 from functools import partial
 
 @jax.jit
+def mapping_norm_to_scale_uniform(dirx, diry, min=0.5, max=1.5):
+    """
+    Computes the scale length/height from the direction vector components. Uniform [0.5, 1.5].
+    """
+    r = jnp.sqrt(dirx**2 + diry**2)
+    # q = jnp.exp(-r**2/2) * (jnp.sqrt(jnp.pi) * jnp.exp(r**2/2) * jax.scipy.special.erf(r/jnp.sqrt(2)) - jnp.sqrt(2)*r)/jnp.sqrt(jnp.pi)
+    q = 1 - jnp.exp(-r**2/2)# * jnp.sqrt(1/jnp.pi/2)
+    q = (max-min)*q + min
+
+    return q
+
+@jax.jit
+def mapping_norm_to_scale_normal(dirx, diry, loc=0., norm=1.):
+    """
+    Computes the scale length/height from the direction vector components. Uniform [0.5, 1.5].
+    """
+    r = jnp.sqrt(dirx**2 + diry**2)
+    q = 1 - jnp.exp(-r**2/2)
+    q = jax.scipy.special.ndtri(q)
+    q = norm * q + loc
+
+    return q
+
+@jax.jit
 def nll_gaussian(z, A, y, sig, l2):
     x = jnn.softplus(z)  # strictly positive
     r = (A @ x - y) / sig
@@ -20,9 +44,26 @@ def dynesty_logl(params, dict_data, num_Vbin):
 @partial(jax.jit, static_argnames=('num_Vbin'))
 def logl(params, dict_data, num_Vbin):
 
+    logM_halo = params[0]
+    logM_disc = params[1]
+    x_alpha = params[2]
+    y_alpha = params[3]
+    x_beta = params[4]
+    y_beta = params[5]
+    x_gamma = params[6]
+    y_gamma = params[7]
+
+    alpha = jnp.arctan2(y_alpha, x_alpha) * 180 / jnp.pi
+    beta = jnp.arctan2(y_beta, x_beta) * 180 / jnp.pi
+    gamma = jnp.arctan2(y_gamma, x_gamma) * 180 / jnp.pi
+
+    logRs_halo = mapping_norm_to_scale_uniform(x_alpha, y_alpha, min=0.5, max=1.5)
+    logRs_disk = mapping_norm_to_scale_uniform(x_beta, y_beta, min=0., max=1.0)
+    logHs_disk = mapping_norm_to_scale_uniform(x_gamma, y_gamma, min=-1.0, max=0.)
+
     params_halo_pot = {
-        'logM': params[0],
-        'Rs':10 ** params[1],
+        'logM': logM_halo,
+        'Rs':10 ** logRs_halo,
         'a':1.0,
         'b':1.0,
         'c':1.0,
@@ -35,15 +76,18 @@ def logl(params, dict_data, num_Vbin):
     }
 
     params_disk_rho = {
-        'logM': params[2],
-        'Rs': 10 ** params[3],
-        'Hs': 10 ** params[4],
+        'logM': logM_disc,
+        'Rs': 10 ** logRs_disk,
+        'Hs': 10 ** logHs_disk,
         'x_origin': 0.0,
         'y_origin': 0.0,
         'z_origin': 0.0,
         'dirx': 0.0,
         'diry': 0.0,
-        'dirz': 1.0
+        'dirz': 1.0,
+        'alpha': alpha,
+        'beta': beta,
+        'gamma': gamma
     }
 
     density_set, V_model, sigma_model, h1_set, h2_set, h3_set, h4_set, _ = model(params_halo_pot, params_disk_rho, dict_data, num_Vbin)
