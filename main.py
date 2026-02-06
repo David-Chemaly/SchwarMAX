@@ -466,8 +466,6 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     A_h3 = h3.T
     A_h4 = h4.T
 
-    '''
-    David do it here:
     @jax.jit
     def MiyamotoNagaiDisk(R, z, phi, params_MN):
         x = R * jnp.cos(phi)
@@ -475,12 +473,7 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
         return MiyamotoNagai_density(x, y, z, params_MN)
 
     @partial(jax.jit, static_argnames=['rho_fct'])
-    def get_mass(rho_fct, dict_params, R_grid, z_grid, phi_grid, dR, dz, dphi, sample):
-        # params_MN = {
-        #     "logM": jnp.log10(4e10).item(),
-        #     "Rs": 3.0,
-        #     "Hs": 0.5,
-        # }
+    def get_mass(R_grid, z_grid, phi_grid, rho_fct, dict_params, dR, dz, dphi, sample):
         R_samples = R_grid + (sample[:,0] - 0.5) * dR
         z_samples = z_grid + (sample[:,1] - 0.5) * dz
         phi_samples = phi_grid + (sample[:,2] - 0.5) * dphi
@@ -491,8 +484,10 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     R_grid, dR = dict_data['R_grid'], dict_data['dR']
     z_grid, dz = dict_data['z_grid'], dict_data['dz']
     phi_grid, dphi = dict_data['phi_grid'], dict_data['dphi']
-    '''
-    y_Rzphi = dict_data['Rzphi_density_data'].astype(jnp.float32)
+    y_Rzphi = jax.vmap(get_mass, in_axes=[0, 0, 0, None, None, None, None, None, None])(
+                R_grid, z_grid, phi_grid, MiyamotoNagaiDisk, params_disk_rho, dR, dz, dphi, dict_data['sample_for_integration']
+    )
+    # y_Rzphi = dict_data['Rzphi_density_data'].astype(jnp.float32)
 
     y_xy = dict_data['XY_density_data'].astype(jnp.float32)
     y_h1 = dict_data['h1_data'].astype(jnp.float32)
@@ -736,14 +731,14 @@ if __name__ == '__main__':
 
     df_Rzphi_data = pd.read_csv(path + 'mock_axisymmetric_disc_Rzphi.csv')
     Rzphi_density_data = jnp.array(df_Rzphi_data['mass'].to_numpy()).astype(jnp.float32)
-    # with open(path + 'mock_axisymmetric_disc_Rzphi.pkl', 'rb') as f:
-    #     Rzphi_density_data = pickle.load(f)
+    with open(path + 'mock_axisymmetric_disc_Rzphi.pkl', 'rb') as f:
+        Rzphi_density_data_load = pickle.load(f)
 
-    # R_grid, z_grid, phi_grid = Rzphi_density_data['R_grid'], Rzphi_density_data['z_grid'], Rzphi_density_data['phi_grid']
-    # dR = np.unique(R_grid)[1] - np.unique(R_grid)[0]
-    # dz = np.unique(z_grid)[1] - np.unique(z_grid)[0]
-    # dphi = np.unique(phi_grid)[1] - np.unique(phi_grid)[0]
-    # sample_for_integration = Rzphi_density_data['sample_for_integration']
+    R_grid, z_grid, phi_grid = Rzphi_density_data_load['R_grid'], Rzphi_density_data_load['z_grid'], Rzphi_density_data_load['phi_grid']
+    dR = np.unique(R_grid)[1] - np.unique(R_grid)[0]
+    dz = np.unique(z_grid)[1] - np.unique(z_grid)[0]
+    dphi = np.unique(phi_grid)[1] - np.unique(phi_grid)[0]
+    sample_for_integration = Rzphi_density_data_load['sample_for_integration']
     # Rzphi_density_data = jnp.array([
     #         get_mass(R_grid[i], z_grid[i], phi_grid[i], dR, dz, dphi,
     #                 dict_data['sample_for_integration']) for i in range(len(R_grid))
@@ -769,13 +764,13 @@ if __name__ == '__main__':
         'num_per_bin': num_per_bin,
         'bin_mapping': bin_mapping,
         'total_bins': total_bins.item(),
-        # 'R_grid': R_grid,
-        # 'z_grid': z_grid,
-        # 'phi_grid': phi_grid,
-        # 'dR': dR,   
-        # 'dz': dz,
-        # 'dphi': dphi,
-        # 'sample_for_integration': sample_for_integration
+        'R_grid': R_grid,
+        'z_grid': z_grid,
+        'phi_grid': phi_grid,
+        'dR': dR,   
+        'dz': dz,
+        'dphi': dphi,
+        'sample_for_integration': sample_for_integration
     }
 
 
