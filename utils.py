@@ -97,3 +97,21 @@ def getCartesianFromCylindrical_clockwise(R, phi, vR, vphi):
     vy = vR * sin_phi - vphi * cos_phi
     
     return x, y, vx, vy
+
+def Rz(t):
+    ct, st = jnp.cos(t), jnp.sin(t)
+    return jnp.array([[ct, -st, 0.0],
+                     [st,  ct, 0.0],
+                     [0.0, 0.0, 1.0]])
+
+def Rx(t):
+    ct, st = jnp.cos(t), jnp.sin(t)
+    return jnp.array([[1.0, 0.0, 0.0],
+                     [0.0,  ct, -st],
+                     [0.0,  st,  ct]])
+
+def makeRotationMatrix(alpha, beta, gamma):
+
+    alpha, beta, gamma = jnp.radians(alpha), jnp.radians(beta), jnp.radians(gamma)
+    return (Rz(gamma) @ Rx(beta) @ Rz(alpha)).T   # X = R @ x
+

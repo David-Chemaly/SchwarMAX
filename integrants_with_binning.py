@@ -289,3 +289,104 @@ def integrate_leapfrog_voronoi(w0, acc_fn, n_steps, dt = 0.010, t0 = 0.0, unroll
     surface_density = counts / (num_per_bin * area_pixel + eps)
 
     return Rzphi_bin_counts, surface_density, h1, h2, h3, h4
+
+
+@partial(jax.jit, static_argnames=('acc_fn', 'n_steps', 'unroll', 'num_Vbin', 'num_segments_Rzphi'))
+def integrate_leapfrog_rot(w0, acc_fn, n_steps, dt = 0.010, t0 = 0.0, unroll=True, 
+                            num_Vbin = 1028, bin_mapping = jnp.zeros(2400, dtype=jnp.int32), num_per_bin = jnp.zeros(1028, dtype=jnp.int32),
+                            Rzphi_minmax=jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]]), XY_minmax=jnp.array([[-10.,10.],[-2.,2.]]),
+                            nRzphi=jnp.array([10,6,6]), nXY=jnp.array([40,30]), num_segments_Rzphi=360,
+                            v0 = jnp.zeros(1028), s= jnp.ones(1028) * 5.0, rotation_matrix = jnp.eye(3)
+                            ):
+    """Leapfrog (KDK) — returns final time and final state only.
+
+    num_segments_Rzphi: int
+        Number of segments for Rzphi bin counting. MUST equal to nRzphi.prod()
+    num_segments_XY: int
+        Number of segments for XY bin counting. MUST equal to nXY.prod()
+    
+    v0 and s are arrays of reference velocity and dispersion for each XY cell for the GH coefficent calculation. Length should equal to nXY.prod()
+    """
+
+    def step(carry, _):
+        t, y = carry
+        r, v = _split(y)
+
+        # params['t'] = t  # Update time-dependent parameters
+        a0 = acc_fn(*r) # , params)
+        v_half = v + 0.5 * dt * a0
+        r_new = r + dt * v_half
+        t_new = t + dt
+
+        # params['t'] = t_new  # Update time-dependent parameters
+        a1 = acc_fn(*r_new) # , params)
+        v_new = v_half + 0.5 * dt * a1
+        y_new = _merge(r_new, v_new)
+        return (t_new, y_new), (t_new, y_new)
+
+    (_, _), (tN, wN) = jax.lax.scan(step, (t0, w0), xs=None, length=n_steps, unroll=unroll)
+
+    # Get 3D grid before rotation
+    Rzphi = jnp.array([jnp.sqrt(wN[:,0]**2 + wN[:,1]**2), wN[:,2], jnp.arctan2(wN[:,1], wN[:,0])]).T
+
+    x = wN[:,:3]
+    v = wN[:,3:]
+    x_rot = (rotation_matrix @ x.T).T
+    v_rot = (rotation_matrix @ v.T).T
+    wN = jnp.concatenate([x_rot, v_rot], axis=-1)
+
+    # rN, vN = wN[:, :3], wN[:, 3:]
+    XY = jnp.array([wN[:,0], wN[:,2]]).T
+
+    Rzphi_strides = jnp.concatenate([jnp.array([1]), jnp.cumprod(nRzphi[:-1])])
+    Rzphi_indices = assign_regular_grid(Rzphi,
+                                        grid_min=Rzphi_minmax[:,0],
+                                        grid_max=Rzphi_minmax[:,1],
+                                        n_bins=nRzphi,
+                                        strides=Rzphi_strides)
+
+    # jax.debug.print("Rzphi_indices: {Rzphi_indices}", Rzphi_indices=Rzphi_indices)
+    Rzphi_bin_counts = jax.ops.segment_sum(jnp.ones_like(Rzphi_indices), Rzphi_indices, num_segments=num_segments_Rzphi)
+    
+    XY_strdides = jnp.concatenate([jnp.array([1]), jnp.cumprod(nXY[:-1])])
+    XY_indices = assign_regular_grid(XY,
+                                    grid_min=XY_minmax[:,0],
+                                    grid_max=XY_minmax[:,1],
+                                    n_bins=nXY,
+                                    strides=XY_strdides)
+    
+    area_pixel = ( (XY_minmax[0,1] - XY_minmax[0,0]) / nXY[0] ) * ( (XY_minmax[1,1] - XY_minmax[1,0]) / nXY[1] ) * 1e6
+    
+    # ==========================================================================
+    # Mapping the regular grid XY_indices to Voronoi bin indices
+    Vbin_indices = bin_mapping[XY_indices]
+
+
+    # ==========================================================================
+    # Compute Gauss-Hermite coefficients in each XY cell
+
+    v0_cell = v0[Vbin_indices]
+    s_cell = s[Vbin_indices]
+
+    vy = wN[:,4]
+    w = (vy - v0_cell) / s_cell # (v_los - v0) / s, where in edge-on case v_los = vy = wN[:,4]
+    counts = jax.ops.segment_sum(jnp.ones_like(vy), Vbin_indices, num_segments=num_Vbin)
+    sum_w1 = jax.ops.segment_sum(w, Vbin_indices, num_segments=num_Vbin)
+    sum_w2 = jax.ops.segment_sum(w**2, Vbin_indices, num_segments=num_Vbin)
+    sum_w3 = jax.ops.segment_sum(w**3, Vbin_indices, num_segments=num_Vbin)
+    sum_w4 = jax.ops.segment_sum(w**4, Vbin_indices, num_segments=num_Vbin)
+    eps = EPSILON
+    norm = counts + eps
+    w1 = sum_w1 / norm
+    w2 = sum_w2 / norm
+    w3 = sum_w3 / norm
+    w4 = sum_w4 / norm
+    
+    h1 = w1
+    h2 = ((w2 - 1) / jnp.sqrt(2))
+    h3 = ((w3 - 3 * w1) / jnp.sqrt(6))
+    h4 = ((w4 - 6 * w2 + 3) / jnp.sqrt(24))
+    # Nxy = counts
+    surface_density = counts / (num_per_bin * area_pixel + eps)
+
+    return Rzphi_bin_counts, surface_density, h1, h2, h3, h4

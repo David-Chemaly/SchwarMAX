@@ -394,6 +394,8 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     num_per_bin = dict_data['num_per_bin']
     bin_mapping = dict_data['bin_mapping']
     # num_Vbin = dict_data['total_bins']
+    alpha, beta, gamma = params_disk_rho['alpha'], params_disk_rho['beta'], params_disk_rho['gamma']
+    rotation_matrix = makeRotationMatrix(alpha, beta, gamma)
 
     #=========================================== GET DISC POTENTIAL =====================================================
 
@@ -433,13 +435,13 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     unroll = False
     initial_time = 0.0
 
-    Rzphi_bin_counts, surface_density, h1, h2, h3, h4 = jax.vmap(integrate_leapfrog_voronoi,
-                                                     in_axes=(0, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None))\
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4 = jax.vmap(integrate_leapfrog_rot, 
+                                                     in_axes=(0, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None))\
                         (w0_new, acc_fn, n_steps, dt, initial_time, unroll,
                         num_Vbin, bin_mapping, num_per_bin,
-                        jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]]), jnp.array([[-10.,10.],[-3.,3.]]),
+                        jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]]), jnp.array([[-12.,12.],[-4.,4.]]),
                         jnp.array([10,6,6]), jnp.array([60,40]), 360,
-                        v0, s)
+                        v0, s, rotation_matrix)
     # jax.debug.print("h1 shape: {x_norm}", x_norm=h1.shape)
     # jax.debug.print("h1 nan: {x_norm}", x_norm=jnp.isnan(h1).sum())
     # print("h1 shape: {x_norm}",h1.shape)
@@ -464,7 +466,34 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     A_h3 = h3.T
     A_h4 = h4.T
 
+    '''
+    David do it here:
+    @jax.jit
+    def MiyamotoNagaiDisk(R, z, phi, params_MN):
+        x = R * jnp.cos(phi)
+        y = R * jnp.sin(phi)
+        return MiyamotoNagai_density(x, y, z, params_MN)
+
+    @partial(jax.jit, static_argnames=['rho_fct'])
+    def get_mass(rho_fct, dict_params, R_grid, z_grid, phi_grid, dR, dz, dphi, sample):
+        # params_MN = {
+        #     "logM": jnp.log10(4e10).item(),
+        #     "Rs": 3.0,
+        #     "Hs": 0.5,
+        # }
+        R_samples = R_grid + (sample[:,0] - 0.5) * dR
+        z_samples = z_grid + (sample[:,1] - 0.5) * dz
+        phi_samples = phi_grid + (sample[:,2] - 0.5) * dphi
+        density_samples = rho_fct(R_samples, z_samples, phi_samples, dict_params)
+        mass_tot = jnp.sum(density_samples * R_samples) / sample.shape[0]
+        return mass_tot
+
+    R_grid, dR = dict_data['R_grid'], dict_data['dR']
+    z_grid, dz = dict_data['z_grid'], dict_data['dz']
+    phi_grid, dphi = dict_data['phi_grid'], dict_data['dphi']
+    '''
     y_Rzphi = dict_data['Rzphi_density_data'].astype(jnp.float32)
+
     y_xy = dict_data['XY_density_data'].astype(jnp.float32)
     y_h1 = dict_data['h1_data'].astype(jnp.float32)
     y_h2 = dict_data['h2_data'].astype(jnp.float32)
@@ -570,7 +599,10 @@ def logl(params, dict_data, num_Vbin):
         'z_origin': 0.0,
         'dirx': 0.0,
         'diry': 0.0,
-        'dirz': 1.0
+        'dirz': 1.0,
+        'alpha': params['alpha'],
+        'beta': params['beta'],
+        'gamma': params['gamma']
     }
 
     density_set, V_model, sigma_model, h1_set, h2_set, h3_set, h4_set, weights = model(params_halo_pot, params_disk_rho, dict_data, num_Vbin)
@@ -655,10 +687,11 @@ def logl(params, dict_data, num_Vbin):
 
 if __name__ == '__main__':
     df_ic = pd.read_csv(path + 'mock_initial_conditions_xyz.csv')
-    df_ic = df_ic[np.sqrt(df_ic['x']**2 + df_ic['y']**2) < 10.0]
-    df_ic = df_ic[np.fabs(df_ic['z']) < 3.0]
+    df_ic = df_ic[np.sqrt(df_ic['x']**2 + df_ic['y']**2) < 15.0]
+    df_ic = df_ic[np.fabs(df_ic['z']) < 4.0]
 
     n_particles =  20_000
+
     print(n_particles)
     np.random.seed(42)
     index = np.random.choice(len(df_ic['x']), size=n_particles, replace=False)
@@ -666,7 +699,8 @@ if __name__ == '__main__':
     # w0 = jnp.array([df_ic['x'], df_ic['y'], df_ic['z'], df_ic['vx'], df_ic['vy'], df_ic['vz']]).T
     w0 = jnp.array(df_ic[['x','y','z']].to_numpy())
 
-    with open(path + 'mock_axisymmetric_disc_XY_voronoi.pkl', 'rb') as f:
+
+    with open(path + 'mock_axisymmetric_disc_XY_withRot.pkl', 'rb') as f:
         bin_dict = pickle.load(f)
 
     # regular grid parameters
@@ -690,6 +724,8 @@ if __name__ == '__main__':
     h4_data = jnp.array(bin_dict['h4'])
     v0 = jnp.array(bin_dict['v0'])
     s = jnp.array(bin_dict['s'])
+    alpha, beta, gamma = bin_dict['orientation']
+    # alpha, beta, gamma = 0,0,0
 
     V_data_err = jnp.where(0.1 * jnp.fabs(V_data) < 10, 10, 0.1 * V_data)
     sigma_data_err = jnp.where(0.1 * jnp.fabs(sigma_data) < 5, 5, 0.1 * sigma_data)
@@ -700,8 +736,18 @@ if __name__ == '__main__':
 
     df_Rzphi_data = pd.read_csv(path + 'mock_axisymmetric_disc_Rzphi.csv')
     Rzphi_density_data = jnp.array(df_Rzphi_data['mass'].to_numpy()).astype(jnp.float32)
+    # with open(path + 'mock_axisymmetric_disc_Rzphi.pkl', 'rb') as f:
+    #     Rzphi_density_data = pickle.load(f)
 
-
+    # R_grid, z_grid, phi_grid = Rzphi_density_data['R_grid'], Rzphi_density_data['z_grid'], Rzphi_density_data['phi_grid']
+    # dR = np.unique(R_grid)[1] - np.unique(R_grid)[0]
+    # dz = np.unique(z_grid)[1] - np.unique(z_grid)[0]
+    # dphi = np.unique(phi_grid)[1] - np.unique(phi_grid)[0]
+    # sample_for_integration = Rzphi_density_data['sample_for_integration']
+    # Rzphi_density_data = jnp.array([
+    #         get_mass(R_grid[i], z_grid[i], phi_grid[i], dR, dz, dphi,
+    #                 dict_data['sample_for_integration']) for i in range(len(R_grid))
+    #     ]).astype(jnp.float32)
     dict_data = {
         'w0': w0,
         'v0': v0,
@@ -722,8 +768,16 @@ if __name__ == '__main__':
         'h4_data_err': h4_data_err,
         'num_per_bin': num_per_bin,
         'bin_mapping': bin_mapping,
-        'total_bins': total_bins.item()
+        'total_bins': total_bins.item(),
+        # 'R_grid': R_grid,
+        # 'z_grid': z_grid,
+        # 'phi_grid': phi_grid,
+        # 'dR': dR,   
+        # 'dz': dz,
+        # 'dphi': dphi,
+        # 'sample_for_integration': sample_for_integration
     }
+
 
     with open(path + '/mock_axisymmetric_disc_potential_params.pkl', 'rb') as f:
         gt_params = pickle.load(f)
@@ -736,6 +790,9 @@ if __name__ == '__main__':
             'logM_disk': gt_params['disc_params']['logM'].item(),
             'logRs_disk': jnp.log10(gt_params['disc_params']['scaleRadius']).item(),
             'logHs_disk': jnp.log10(gt_params['disc_params']['scaleHeight']).item(),
+            'alpha': alpha,
+            'beta': beta,
+            'gamma': gamma
     }
 
     logL = logl(ground_truth, dict_data, dict_data['total_bins'])
