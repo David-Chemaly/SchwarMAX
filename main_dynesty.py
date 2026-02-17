@@ -13,8 +13,8 @@ from likelihoods import dynesty_logl
 
 def get_dict_data(path):
     df_ic = pd.read_csv(path + 'mock_initial_conditions_xyz.csv')
-    df_ic = df_ic[np.sqrt(df_ic['x']**2 + df_ic['y']**2) < 10.0]
-    df_ic = df_ic[np.fabs(df_ic['z']) < 3.0]
+    df_ic = df_ic[np.sqrt(df_ic['x']**2 + df_ic['y']**2) < 15.0]
+    df_ic = df_ic[np.fabs(df_ic['z']) < 4.0]
 
     n_particles =  20_000
     print(n_particles)

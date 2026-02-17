@@ -139,3 +139,15 @@ def DoubleExponentialDiskx2FerrersBar_density(x, y, z, params):
     rho_bar   = FerrersBar_density(x, y, z, bar_params)
 
     return rho_thin + rho_thick + rho_bar
+
+def NFW_density(x, y, z, params):
+    rin = _shift(x, y, z, params)       # (3, ...)
+    rvec = _rotate(rin, params)         # (3, ...)
+    rx, ry, rz = rvec + EPSILON
+
+    # Cylindrical R in rotated frame
+    r = jnp.sqrt(rx**2 + ry**2 + rz**2)
+
+    val = 10 ** params['logM'] / (4*jnp.pi * r * (params['Rs'] + r)**2)
+
+    return val
