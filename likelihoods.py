@@ -3,8 +3,11 @@ import jax.numpy as jnp
 import jax.numpy.linalg as jnn
 
 from constants import EPSILON
-from main import model
+from model import model, projection
 from functools import partial
+
+from densities import DoubleExponentialDisk_density
+from utils import *
 
 @jax.jit
 def mapping_norm_to_scale_uniform(dirx, diry, min=0.5, max=1.5):
@@ -136,13 +139,14 @@ def logl(params, dict_data, num_Vbin):
 def logl_angular_input(params, dict_data, num_Vbin):
 
     logM_halo = params[0]
-    logM_disc = params[1]
+    logrho0_disc = params[1]
     logRs_halo = params[2]
     logRs_disk = params[3]
     logHs_disk = params[4]
     alpha = params[5]
     beta = params[6]
     gamma = params[7]
+    log_light_to_mass_ratio = params[8]
 
     alpha = alpha * 180 / jnp.pi
     beta = beta * 180 / jnp.pi
@@ -163,9 +167,10 @@ def logl_angular_input(params, dict_data, num_Vbin):
     }
 
     params_disk_rho = {
-        'logM': logM_disc,
-        'Rs': 10 ** logRs_disk,
-        'Hs': 10 ** logHs_disk,
+        'rho0': 10 ** logrho0_disc,
+        'Rd': 10 ** logRs_disk,
+        'hz': 10 ** logHs_disk,
+        'light_to_mass_ratio': 10 ** log_light_to_mass_ratio,
         'x_origin': 0.0,
         'y_origin': 0.0,
         'z_origin': 0.0,
@@ -177,41 +182,101 @@ def logl_angular_input(params, dict_data, num_Vbin):
         'gamma': gamma
     }
 
-    density_set, V_model, sigma_model, h1_set, h2_set, h3_set, h4_set, _ = model(params_halo_pot, params_disk_rho, dict_data, num_Vbin)
-    density_2DXY, y_xy, sig_xy = density_set
-    h1_model, y_h1, sig_A1 = h1_set
-    h2_model, y_h2, sig_A2 = h2_set
-    h3_model, y_h3, sig_A3 = h3_set
-    h4_model, y_h4, sig_A4 = h4_set
+    surface_density_model = projection(params_disk_rho, dict_data, num_Vbin)
+    surface_density_gt = dict_data['XY_density_data']
 
-    V_model = jnp.where(jnp.isnan(V_model), 0.0, V_model)
-    sigma_model = jnp.where(jnp.isnan(sigma_model), 0.0, sigma_model)
-    h3_model = jnp.where(jnp.isnan(h3_model), 0.0, h3_model)
-    h4_model = jnp.where(jnp.isnan(h4_model), 0.0, h4_model)
-    h1_data, h1_data_err = y_h1, sig_A1
-    h2_data, h2_data_err = y_h2, sig_A2
-    h3_data, h3_data_err = y_h3, sig_A3
-    h4_data, h4_data_err = y_h4, sig_A4
+    chi2 = jnp.sum((surface_density_gt - surface_density_model)**2 / (0.1 * surface_density_gt)**2)
+    logl_density = -0.5 * chi2 / num_Vbin
 
-    res_density = ((density_2DXY - y_xy) / (sig_xy + EPSILON))**2
-    res_h1 = ((h1_model - h1_data) / (h1_data_err + 1e-3))**2
-    res_h2 = ((h2_model - h2_data) / (h2_data_err + 1e-3))**2
-    res_h3 = ((h3_model - h3_data) / (h3_data_err + 1e-3))**2
-    res_h4 = ((h4_model - h4_data) / (h4_data_err + 1e-3))**2    
+    logl_density_max = dict_data['logl_density_max']
+    # jax.debug.print("logl_density: {logl_density}, logl_density_max: {logl_density_max}", logl_density=logl_density, logl_density_max=logl_density_max)
 
-    res_density = jnp.where(res_density<jnp.percentile(res_density, 98.0), res_density, 0)
-    res_h1 = jnp.where(res_h1<jnp.percentile(res_h1, 98.0), res_h1, 0)
-    res_h2 = jnp.where(res_h2<jnp.percentile(res_h2, 98.0), res_h2, 0)
-    res_h3 = jnp.where(res_h3<jnp.percentile(res_h3, 98.0), res_h3, 0)
-    res_h4 = jnp.where(res_h4<jnp.percentile(res_h4, 98.0), res_h4, 0)
+    def true_func():
+        return -jnp.inf
+    def false_func():
+        density_set, V_model, sigma_model, h1_set, h2_set, h3_set, h4_set, _weights = model(params_halo_pot, params_disk_rho, dict_data, num_Vbin)
 
-    val1 = jnp.nansum( -0.5 * res_density ) / len(density_2DXY)
-    val4 = jnp.nansum( -0.5 * res_h1 ) / len(h1_model)
-    val5 = jnp.nansum( -0.5 * res_h2 ) / len(h2_model)
-    val6 = jnp.nansum( -0.5 * res_h3 ) / len(h3_model)
-    val7 = jnp.nansum( -0.5 * res_h4 ) / len(h4_model)
+        def _true_func():
+            return -jnp.inf
+        def _false_func():
+            density_2DXY, y_xy, sig_xy = density_set
+            h1_model, y_h1, sig_A1 = h1_set
+            h2_model, y_h2, sig_A2 = h2_set
+            h3_model, y_h3, sig_A3 = h3_set
+            h4_model, y_h4, sig_A4 = h4_set
 
-    log_likelihood = 0
-    log_likelihood += val1 + val4 + val5 + val6 + val7
+            # V_model = jnp.where(jnp.isnan(V_model), 0.0, V_model)
+            # sigma_model = jnp.where(jnp.isnan(sigma_model), 0.0, sigma_model)
+            h3_model = jnp.where(jnp.isnan(h3_model), 0.0, h3_model)
+            h4_model = jnp.where(jnp.isnan(h4_model), 0.0, h4_model)
+            h1_data, h1_data_err = y_h1, sig_A1
+            h2_data, h2_data_err = y_h2, sig_A2
+            h3_data, h3_data_err = y_h3, sig_A3
+            h4_data, h4_data_err = y_h4, sig_A4
 
-    return log_likelihood
+            res_density = ((density_2DXY - y_xy) / (sig_xy + EPSILON))**2
+            res_h1 = ((h1_model - h1_data) / (h1_data_err + 1e-3))**2
+            res_h2 = ((h2_model - h2_data) / (h2_data_err + 1e-3))**2
+            res_h3 = ((h3_model - h3_data) / (h3_data_err + 1e-3))**2
+            res_h4 = ((h4_model - h4_data) / (h4_data_err + 1e-3))**2    
+
+            res_density = jnp.where(res_density<jnp.percentile(res_density, 98.0), res_density, 0)
+            res_h1 = jnp.where(res_h1<jnp.percentile(res_h1, 98.0), res_h1, 0)
+            res_h2 = jnp.where(res_h2<jnp.percentile(res_h2, 98.0), res_h2, 0)
+            res_h3 = jnp.where(res_h3<jnp.percentile(res_h3, 98.0), res_h3, 0)
+            res_h4 = jnp.where(res_h4<jnp.percentile(res_h4, 98.0), res_h4, 0)
+
+            val1 = jnp.nansum( -0.5 * res_density ) / len(density_2DXY)
+            val4 = jnp.nansum( -0.5 * res_h1 ) / len(h1_model)
+            val5 = jnp.nansum( -0.5 * res_h2 ) / len(h2_model)
+            val6 = jnp.nansum( -0.5 * res_h3 ) / len(h3_model)
+            val7 = jnp.nansum( -0.5 * res_h4 ) / len(h4_model)
+
+            log_likelihood = 0
+            log_likelihood += val1 + val4 + val5 + val6 + val7
+
+            return log_likelihood
+        
+        nan_in_weights = jnp.isnan(_weights).any()
+        logl = jax.lax.cond(nan_in_weights, _true_func, _false_func)
+        return logl
+    
+
+    val = jax.lax.cond(logl_density < logl_density_max - 100, true_func, false_func)
+    # val = false_func()
+    return val
+    
+
+@partial(jax.jit, static_argnames=('num_Vbin'))
+def logl_density(params, dict_data, num_Vbin):
+
+    logrho0_disc = params[0]
+    logRd_disc = params[1]
+    loghz_disc = params[2]
+    alpha = params[3] * 180 / jnp.pi
+    beta = params[4] * 180 / jnp.pi
+    gamma = params[5] * 180 / jnp.pi
+
+
+    params_disc = {
+        'rho0': 10.0**logrho0_disc,
+        'Rd': 10.0**logRd_disc,
+        'hz': 10.0**loghz_disc,
+        'x_origin': 0.0,
+        'y_origin': 0.0,
+        'z_origin': 0.0,
+        'dirx': 0.0,
+        'diry': 0.0,
+        'dirz': 1.0,
+        'alpha': alpha,
+        'beta': beta,
+        'gamma': gamma,
+        'light_to_mass_ratio': 1,
+    }
+
+    surface_density_model = projection(params_disc, dict_data, num_Vbin)
+    surface_density_gt = dict_data['XY_density_data']
+
+    chi2 = jnp.sum((surface_density_gt - surface_density_model)**2 / (0.1 * surface_density_gt)**2)
+    logl = -0.5 * chi2 / num_Vbin
+    return logl

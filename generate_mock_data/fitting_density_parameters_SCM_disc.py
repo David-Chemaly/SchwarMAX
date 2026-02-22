@@ -163,6 +163,10 @@ if __name__ == "__main__":
     corner.corner(samples_plot, labels=['R_d','h_z', 'mass'], 
                 show_titles=True, title_fmt='.2f', title_kwargs={"fontsize": 15},
                 smooth=True, quantiles=[0.16, 0.5, 0.84], fig=fig)
+    
+    ########################
+    fig.savefig('/data/hz420-2/SchwarMAX/SCM_disc/model/disc_posterior.png')
+    ########################
 
     best_fit_param = np.percentile(samples_plot, 50, axis=0)
     print("Best-fit parameters:")
@@ -223,5 +227,6 @@ if __name__ == "__main__":
     ax[1].set_xlabel('z')
     ax[1].set_ylabel('Mass')
     ax[1].set_yscale('log')
+
 
     plt.show()

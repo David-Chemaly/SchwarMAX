@@ -193,6 +193,9 @@ if __name__ == "__main__":
     corner.corner(samples_plot, labels=['logM', 'Rs'], 
                 show_titles=True, title_fmt='.2f', title_kwargs={"fontsize": 15},
                 smooth=True, quantiles=[0.16, 0.5, 0.84], fig=fig)
+    ########################
+    fig.savefig('/data/hz420-2/SchwarMAX/SCM_disc/model/halo_posterior.png')
+    ########################
 
     best_fit_param = np.percentile(samples_plot, 50, axis=0)
     print("Best-fit parameters:")

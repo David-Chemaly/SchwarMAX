@@ -1,6 +1,9 @@
 import sys
 sys.path.append('/home/hz420/python_script/SchwarMAX/')
 
+import numpy as np
+import scipy as sp
+
 import pickle
 import jax
 import jax.numpy as jnp
@@ -28,6 +31,9 @@ path = '/home/hz420/python_script/SchwarMAX/'
 import numpy as np
 from powerbin import PowerBin
 
+def gaussian(x, mu, sigma):
+    return 1/(sigma * np.sqrt(2 * np.pi)) * np.exp(-0.5 * ((x - mu) / sigma)**2)
+
 def Rz(t):
     ct, st = jnp.cos(t), jnp.sin(t)
     return jnp.array([[ct, -st, 0.0],
@@ -51,8 +57,19 @@ def makeRotationMatrix(alpha, beta, gamma):
 # mass_data = data['mass']
 
 mass_unit = 1/((G*u.Msun).to(u.kpc*(u.km/u.s)**2))
-w0_data, mass_data = agama.readSnapshot(f'/data/hz420-2/SchwarMAX/SCM_disc/model/model_disc_final')
+w0_data, mass_data = agama.readSnapshot(f'/data/hz420-2/SchwarMAX/SCM_disc_bulge2/model/t_t0_0')
 mass_data = mass_data * mass_unit.value
+
+mask = (mass_data!=np.unique(mass_data)[-1])
+w0_data = w0_data[mask]
+mass_data = mass_data[mask]
+
+w0_data[:,0] = w0_data[:,0] - np.mean(w0_data[:,0])
+w0_data[:,1] = w0_data[:,1] - np.mean(w0_data[:,1])
+w0_data[:,2] = w0_data[:,2] - np.mean(w0_data[:,2])
+w0_data[:,3] = w0_data[:,3] - np.mean(w0_data[:,3])
+w0_data[:,4] = w0_data[:,4] - np.mean(w0_data[:,4])
+w0_data[:,5] = w0_data[:,5] - np.mean(w0_data[:,5])
 
 w0_data[:,0] = -w0_data[:,0]
 w0_data[:,3] = -w0_data[:,3]
@@ -147,7 +164,7 @@ XY_coords = XY_coords[mask]
 signal = signal[mask]
 noise = noise[mask]
 
-target_sn = 25
+target_sn = 30
 def capacity_spec(index):
     """Calculates (S/N)^2 for a bin from its pixel indices."""
     # Standard S/N formula for uncorrelated noise
@@ -193,6 +210,17 @@ ax.set_ylabel('Y [kpc]')
 
 # Create mock data in voronoi bins
 
+percentile_cut_1_99 = np.zeros_like(mass_data)
+for i in tqdm(range(0, np.amax(_bin_index_remap)+1)):
+    mask = (XY_Vbin_index == i)
+
+    mask_percentile_i = np.where((vy[mask] < np.percentile(vy[mask], 99)) & (vy[mask] > np.percentile(vy[mask], 1)), 1, 0)
+    percentile_cut_1_99[mask] = mask_percentile_i
+vy = vy[percentile_cut_1_99==1] # remove the outliers beyond 1-99 percentile to make the GH moments more robust
+mass_data = mass_data[percentile_cut_1_99==1]
+XY_Vbin_index = XY_Vbin_index[percentile_cut_1_99==1]
+
+
 mass_tot = jax.ops.segment_sum(mass_data, XY_Vbin_index, num_segments=np.amax(_bin_index_remap)+1)
 V_mean = jax.ops.segment_sum(mass_data * vy, XY_Vbin_index, num_segments=np.amax(_bin_index_remap)+1) / (mass_tot + EPSILON)
 V2_mean = jax.ops.segment_sum(mass_data * vy**2, XY_Vbin_index, num_segments=np.amax(_bin_index_remap)+1) / (mass_tot + EPSILON)
@@ -200,16 +228,38 @@ V_sigma = jnp.sqrt(jnp.clip(V2_mean - V_mean**2, a_min=0.0))
 
 v0 = V_mean# + jnp.array(np.random.uniform(-5., 5., size=V_mean.shape))
 s = V_sigma# + jnp.array(np.random.uniform(5., 20., size=V_sigma.shape))
-# s = jnp.where(s < 10.0, 10.0, s)
+
+# v0_ls, s_ls = [],[]
+# for i in tqdm(range(0, np.amax(_bin_index_remap)+1)):
+#     mask = (XY_Vbin_index == i)
+#     H_vy, edges = np.histogram(vy[mask], bins=50, range=[V_mean[i]-200,V_mean[i]+200], weights=mass_data[mask])
+#     H_vy2 = np.histogram(vy[mask], bins=50, range=[V_mean[i]-200,V_mean[i]+200], weights=mass_data[mask]*vy[mask]**2)[0]
+#     H_vy_err = np.sqrt(H_vy2)
+#     H_vy_err = H_vy_err / np.sum(H_vy) / ((edges[1] - edges[0])) + 1e-4
+#     H_vy = H_vy / np.sum(H_vy) / ((edges[1] - edges[0]))
+#     # H_vy_err = H_vy * 0.1 + EPSILON
+#     edge_mid = 0.5 * (edges[1:] + edges[:-1])
+#     _edge_mid = (edge_mid - V_mean[i]) / (V_sigma[i] + EPSILON)
+#     try:
+#         popt, _ = sp.optimize.curve_fit(gaussian, edge_mid, H_vy, p0=[V_mean[i], V_sigma[i]], sigma=H_vy_err)
+#         v0_ls.append(popt[0])
+#         s_ls.append(popt[1])
+#     except Exception as e:
+#         v0_ls.append(V_mean[i])
+#         s_ls.append(V_sigma[i])
+#         print(f"Fitting failed for bin {i} with error: {e}. Using mean and sigma instead.")
+# v0, s = jnp.array(v0_ls), jnp.array(s_ls)
+
 v0_cell = v0[XY_Vbin_index]
 s_cell = s[XY_Vbin_index]
 
 w = (vy - v0_cell) / s_cell # (v_los - v0) / s, where in edge-on case v_los = vy = wN[:,4]
-counts = jax.ops.segment_sum(jnp.ones_like(vy), XY_Vbin_index, num_segments=np.amax(_bin_index_remap)+1)
-sum_w1 = jax.ops.segment_sum(w, XY_Vbin_index, num_segments=np.amax(_bin_index_remap)+1)
-sum_w2 = jax.ops.segment_sum(w**2, XY_Vbin_index, num_segments=np.amax(_bin_index_remap)+1)
-sum_w3 = jax.ops.segment_sum(w**3, XY_Vbin_index, num_segments=np.amax(_bin_index_remap)+1)
-sum_w4 = jax.ops.segment_sum(w**4, XY_Vbin_index, num_segments=np.amax(_bin_index_remap)+1)
+
+counts = jax.ops.segment_sum(mass_data, XY_Vbin_index, num_segments=np.amax(_bin_index_remap)+1)
+sum_w1 = jax.ops.segment_sum(w * mass_data, XY_Vbin_index, num_segments=np.amax(_bin_index_remap)+1)
+sum_w2 = jax.ops.segment_sum(w**2 * mass_data, XY_Vbin_index, num_segments=np.amax(_bin_index_remap)+1)
+sum_w3 = jax.ops.segment_sum(w**3 * mass_data, XY_Vbin_index, num_segments=np.amax(_bin_index_remap)+1)
+sum_w4 = jax.ops.segment_sum(w**4 * mass_data, XY_Vbin_index, num_segments=np.amax(_bin_index_remap)+1)
 eps = EPSILON
 norm = counts + eps
 w1 = sum_w1 / norm
@@ -287,6 +337,22 @@ for i in range (0,2):
         ax1[i,j].set_ylabel('Y [kpc]')
         ax1[i,j].contour(xmid, ymid, np.log10(H).T, levels=10, colors='grey', linewidths=2)
 
+fig2, ax2 = plt.subplots(1, 2, figsize=(12,4))
+cb7 = ax2[0].scatter(df_XY_merged['X_grid'], df_XY_merged['Y_grid'], c= v0[df_XY_merged['Vbin_index'].to_numpy()],
+                s = 20, cmap='coolwarm', marker = 's')
+fig2.colorbar(cb7, ax=ax2[0], label='v0')
+ax2[0].set_title('v0')
+ax2[0].set_aspect('equal')
+ax2[0].set_xlabel('X [kpc]')
+ax2[0].set_ylabel('Y [kpc]')
+cb7 = ax2[1].scatter(df_XY_merged['X_grid'], df_XY_merged['Y_grid'], c= s[df_XY_merged['Vbin_index'].to_numpy()],
+                s = 20, cmap='coolwarm', marker = 's')
+fig2.colorbar(cb7, ax=ax2[1], label='s')
+ax2[1].set_title('s')
+ax2[1].set_aspect('equal')
+ax2[1].set_xlabel('X [kpc]')
+ax2[1].set_ylabel('Y [kpc]')
+
 bin_dict = {
     'nX_nY': [nX, nY],
     'X_minmax': [X_min, X_max],
@@ -310,8 +376,8 @@ bin_dict = {
     'orientation': (alpha, beta, gamma)
 }
 
-with open(path + 'mock_SCM_disc_XY_withRot.pkl', 'wb') as f:
+with open(path + 'mock_Nbody_disc_bulge_XY_withRot.pkl', 'wb') as f:
     pickle.dump(bin_dict, f)
 
-fig1.savefig('/data/hz420-2/SchwarMAX/plots/mock_SCM_disc_XY_withRot.png', bbox_inches='tight')
+fig1.savefig('/data/hz420-2/SchwarMAX/plots/mock_Nbody_disc_bulge_XY_withRot.png', bbox_inches='tight')
 plt.show()
