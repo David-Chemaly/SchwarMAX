@@ -77,3 +77,64 @@ def rotate_zaxis(vec, p):
     R = get_mat(p["dirx"], p["diry"], p["dirz"])  # (3,3)
     # Tensordot over axis: (i,a) * (a,...) -> (i,...)
     return jnp.tensordot(R, vec, axes=[[1],[0]])
+
+@jax.jit
+def getCartesianFromCylindrical_clockwise(R, phi, vR, vphi):
+    """
+    Reverts R, phi, vR, vphi back to Cartesian x, y, vx, vy.
+    Consistent with the 'clockwise' vphi convention provided.
+    """
+    cos_phi = jnp.cos(phi)
+    sin_phi = jnp.sin(phi)
+    
+    # 1. Positions
+    x = R * cos_phi
+    y = R * sin_phi
+    
+    # 2. Velocities
+    # Derived by inverting the linear system from your input function
+    vx = vR * cos_phi + vphi * sin_phi
+    vy = vR * sin_phi - vphi * cos_phi
+    
+    return x, y, vx, vy
+
+def Rz(t):
+    ct, st = jnp.cos(t), jnp.sin(t)
+    return jnp.array([[ct, -st, 0.0],
+                     [st,  ct, 0.0],
+                     [0.0, 0.0, 1.0]])
+
+def Rx(t):
+    ct, st = jnp.cos(t), jnp.sin(t)
+    return jnp.array([[1.0, 0.0, 0.0],
+                     [0.0,  ct, -st],
+                     [0.0,  st,  ct]])
+
+def makeRotationMatrix(alpha, beta, gamma):
+
+    alpha, beta, gamma = jnp.radians(alpha), jnp.radians(beta), jnp.radians(gamma)
+    return (Rz(gamma) @ Rx(beta) @ Rz(alpha)).T   # X = R @ x
+
+def halo_mass_from_stellar_mass(M_star,
+    N=0.0351, log10_M1=11.59, beta=1.376, gamma=0.608,
+    mmin=1e9, mmax=3e16, tol=1e-6, max_iter=200):
+    """
+    Return halo mass M_h [Msun] for a given stellar mass M_star [Msun]
+    using the Moster+2013 z=0 SHMR (median relation).
+    """
+    def mstar_from_mh(Mh):
+        x = Mh / (10**log10_M1)
+        return 2*N*Mh / (x**(-beta) + x**gamma)
+
+    a, b = mmin, mmax
+    for _ in range(max_iter):
+        mid = 10**((jnp.log10(a)+jnp.log10(b))/2)
+        if mstar_from_mh(mid) > M_star:
+            b = mid
+        else:
+            a = mid
+        if abs(jnp.log10(b) - jnp.log10(a)) < tol:
+            return 10**((jnp.log10(a)+jnp.log10(b))/2)
+
+    return 10**((jnp.log10(a)+jnp.log10(b))/2)
+

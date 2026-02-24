@@ -34,7 +34,7 @@ def MiyamotoNagai_density(x, y, z, params):
 # ---------- Double Exponential Disk ----------
 @jax.jit
 def DoubleExponentialDisk_density(x, y, z, params):
-    """Volume density for a simple exponential disc: rho(R,z) = (Sigma0/(2hz)) e^{-R/Rd} e^{-|z|/hz}."""
+    """Volume density for a simple exponential disc: rho(R,z) = (rho0) e^{-R/Rd} e^{-|z|/hz}."""
     # Shift and rotate coordinates
     rin = shift_origin(x, y, z, params)       # (3, ...)
     rvec = rotate_zaxis(rin, params)         # (3, ...)
@@ -43,7 +43,7 @@ def DoubleExponentialDisk_density(x, y, z, params):
     # Cylindrical R in rotated frame
     R = jnp.sqrt(rx**2 + ry**2)
 
-    return (params['Sigma0'] / (2.0 * params['hz'])) * jnp.exp(-R / params['Rd']) * jnp.exp(-jnp.abs(rz) / params['hz'])
+    return (params['rho0']) * jnp.exp(-R / params['Rd']) * jnp.exp(-jnp.abs(rz) / params['hz'])
 
 # ---------- Ferrers Bar ----------
 @jax.jit
@@ -119,3 +119,28 @@ def DoubleExponentialDiskx2FerrersBar_density(x, y, z, params):
     rho_bar   = FerrersBar_density(x, y, z, bar_params)
 
     return rho_thin + rho_thick + rho_bar
+
+def NFW_density(x, y, z, params):
+    rin = _shift(x, y, z, params)       # (3, ...)
+    rvec = _rotate(rin, params)         # (3, ...)
+    rx, ry, rz = rvec + EPSILON
+
+    # Cylindrical R in rotated frame
+    r = jnp.sqrt(rx**2 + ry**2 + rz**2)
+
+    val = 10 ** params['logM'] / (4*jnp.pi * r * (params['Rs'] + r)**2)
+
+    return val
+
+@jax.jit
+def Hernquist_density(x, y, z, params):
+    rin = _shift(x, y, z, params)       # (3, ...)
+    rvec = _rotate(rin, params)         # (3, ...)
+    rx, ry, rz = rvec + EPSILON
+
+    # Cylindrical R in rotated frame
+    r = jnp.sqrt(rx**2 + ry**2 + rz**2)
+
+    val = 10 ** params['logM'] / (2*jnp.pi) * params['Rs'] / (r * (params['Rs'] + r)**3)
+
+    return val

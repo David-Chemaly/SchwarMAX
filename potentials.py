@@ -116,3 +116,17 @@ def Bar_hessian(x, y, z, params):
     hess_phi = jax.hessian(potential_vec)(jnp.array([x, y, z]))
     return hess_phi
 
+def Hernquist_potential(x, y, z, params):
+    '''
+    params: dict with keys 'logM', 'Rs', 'x_origin', 'y_origin', 'z_origin', 'dirx', 'diry', 'dirz'
+    '''
+    rin  = _shift(x, y, z, params)
+    rvec = _rotate(rin, params)  
+    rx, ry, rz = rvec + EPSILON
+
+    # Cylindrical R in rotated frame
+    r = jnp.sqrt(rx**2 + ry**2 + rz**2)
+    
+    Phi = - G * 10**params['logM'] / (r + params['Rs'])
+
+    return Phi
