@@ -57,7 +57,7 @@ def makeRotationMatrix(alpha, beta, gamma):
 # mass_data = data['mass']
 
 mass_unit = 1/((G*u.Msun).to(u.kpc*(u.km/u.s)**2))
-w0_data, mass_data = agama.readSnapshot(f'/data/hz420-2/SchwarMAX/SCM_disc_bulge2/model/t_t0_0')
+w0_data, mass_data = agama.readSnapshot(f'/data/hz420-2/SchwarMAX/SCM_disc_bulge2/model/t_t0_1')
 mass_data = mass_data * mass_unit.value
 
 mask = (mass_data!=np.unique(mass_data)[-1])

@@ -63,7 +63,7 @@ def DoubleExponentialDisk_density(x, y, z, params):
     # Cylindrical R in rotated frame
     R = jnp.sqrt(rx**2 + ry**2)
 
-    return (params['rho0']) * jnp.exp(-R / params['Rd']) * jnp.exp(-jnp.abs(rz) / params['hz'])
+    return (params['rho0_disc']) * jnp.exp(-R / params['Rd_disc']) * jnp.exp(-jnp.abs(rz) / params['hz_disc'])
 
 # ---------- Ferrers Bar ----------
 @jax.jit
@@ -161,6 +161,6 @@ def Hernquist_density(x, y, z, params):
     # Cylindrical R in rotated frame
     r = jnp.sqrt(rx**2 + ry**2 + rz**2)
 
-    val = 10 ** params['logM'] / (2*jnp.pi) * params['Rs'] / (r * (params['Rs'] + r)**3)
+    val = 10 ** params['logM_bulge'] / (2*jnp.pi) * params['Rs_bulge'] / (r * (params['Rs_bulge'] + r)**3) * jnp.exp(-(r / 4)**4)
 
     return val

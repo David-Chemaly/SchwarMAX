@@ -29,7 +29,7 @@ from utils import *
 from constants import EPSILON
 
 from potentials import NFW_acceleration
-from densities import MiyamotoNagai_density, DoubleExponentialDisk_density
+from densities import MiyamotoNagai_density, DoubleExponentialDisk_density, Hernquist_density
 
 from CylindricalSpline import get_phi_m, get_acc, evaluate_phi_axisymmetric
 
@@ -47,7 +47,7 @@ def potential_func(x, y, z, dict_phi, params_halo):
 def density_func(x, y, z, params):
     """ Returns Stellar Density nu(R, z) """
     # Double Exponential Disk
-    val = DoubleExponentialDisk_density(x, y, z, params)
+    val = DoubleExponentialDisk_density(x, y, z, params) + Hernquist_density(x, y, z, params)
     return val
 
 @jax.jit
@@ -210,7 +210,7 @@ def _nll_z(z,
     #                 tot=val1 + val2 + val3 + val4 + val5 + val6 + regularisation_factor)
 
 
-    return val1 + val2 + val3 + val4 + val5 + val6 + regularisation_factor#
+    return val2 + regularisation_factor#val1 +  + val3 + val4 + val5 + val6
 _nll_z = jax.value_and_grad(_nll_z)
 
 @jax.jit
@@ -402,7 +402,7 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax = 50, 30, 1e-2, 30.0, 1e-3, 15.0, 8.
     Nphi = 200
     N_int = 10_000
-    dict_phi = get_phi_m(DoubleExponentialDisk_density, params_disk_rho, NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax, Nphi, N_int)
+    dict_phi = get_phi_m(density_func, params_disk_rho, NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax, Nphi, N_int)
 
     #=========================================== GET INITIAL VELOCITY ===================================================
 
@@ -470,10 +470,10 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     A_h4 = h4.T
 
     @jax.jit
-    def density_func(R, z, phi, params):
+    def density_func_Rz(R, z, phi, params):
         x = R * jnp.cos(phi)
         y = R * jnp.sin(phi)
-        return DoubleExponentialDisk_density(x, y, z, params)
+        return density_func(x, y, z, params)
 
     @partial(jax.jit, static_argnames=['rho_fct'])
     def get_mass(R_grid, z_grid, phi_grid, rho_fct, dict_params, dR, dz, dphi, sample):
@@ -488,7 +488,7 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     z_grid, dz = dict_data['z_grid'], dict_data['dz']
     phi_grid, dphi = dict_data['phi_grid'], dict_data['dphi']
     y_Rzphi = jax.vmap(get_mass, in_axes=[0, 0, 0, None, None, None, None, None, None])(
-                R_grid, z_grid, phi_grid, density_func, params_disk_rho, dR, dz, dphi, dict_data['sample_for_integration']
+                R_grid, z_grid, phi_grid, density_func_Rz, params_disk_rho, dR, dz, dphi, dict_data['sample_for_integration']
     )
     # y_Rzphi = dict_data['Rzphi_density_data'].astype(jnp.float32)
 
@@ -589,7 +589,7 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax = 50, 30, 1e-2, 30.0, 1e-3, 15.0, 8.
     Nphi = 200
     N_int = 10_000
-    dict_phi = get_phi_m(DoubleExponentialDisk_density, params_disk_rho, NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax, Nphi, N_int)
+    dict_phi = get_phi_m(density_func, params_disk_rho, NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax, Nphi, N_int)
 
     #=========================================== GET INITIAL VELOCITY ===================================================
 
@@ -641,10 +641,10 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     A_h4 = h4.T
 
     @jax.jit
-    def density_func(R, z, phi, params):
+    def density_func_Rz(R, z, phi, params):
         x = R * jnp.cos(phi)
         y = R * jnp.sin(phi)
-        return DoubleExponentialDisk_density(x, y, z, params)
+        return density_func(x, y, z, params)
 
     @partial(jax.jit, static_argnames=['rho_fct'])
     def get_mass(R_grid, z_grid, phi_grid, rho_fct, dict_params, dR, dz, dphi, sample):
@@ -659,7 +659,7 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     z_grid, dz = dict_data['z_grid'], dict_data['dz']
     phi_grid, dphi = dict_data['phi_grid'], dict_data['dphi']
     y_Rzphi = jax.vmap(get_mass, in_axes=[0, 0, 0, None, None, None, None, None, None])(
-                R_grid, z_grid, phi_grid, density_func, params_disk_rho, dR, dz, dphi, dict_data['sample_for_integration']
+                R_grid, z_grid, phi_grid, density_func_Rz, params_disk_rho, dR, dz, dphi, dict_data['sample_for_integration']
     )
     # y_Rzphi = dict_data['Rzphi_density_data'].astype(jnp.float32)
 
@@ -768,138 +768,48 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
               weights
 
 
-# @jax.jit
-@partial(jax.jit, static_argnames=('num_Vbin'))
-def logl(params, dict_data, num_Vbin):
-
-
-    params_halo_pot = {
-        'logM': params['logM_halo'],
-        'Rs':10 ** params['logRs_halo'],
-        'a':1.0,
-        'b':1.0,
-        'c':1.0,
-        'x_origin':0.0,
-        'y_origin':0.0,
-        'z_origin':0.0,
-        'dirx':0.0,
-        'diry':0.0,
-        'dirz':1.0
-    }
-
-    params_disk_rho = {
-        'logM': params['logM_disk'],
-        'Rs': 10 ** params['logRs_disk'],
-        'Hs': 10 ** params['logHs_disk'],
-        'x_origin': 0.0,
-        'y_origin': 0.0,
-        'z_origin': 0.0,
-        'dirx': 0.0,
-        'diry': 0.0,
-        'dirz': 1.0,
-        'alpha': params['alpha'],
-        'beta': params['beta'],
-        'gamma': params['gamma']
-    }
-
-    density_set, V_model, sigma_model, h1_set, h2_set, h3_set, h4_set, weights = model(params_halo_pot, params_disk_rho, dict_data, num_Vbin)
-    density_2DXY, y_xy, sig_xy = density_set
-    h1_model, y_h1, sig_A1 = h1_set
-    h2_model, y_h2, sig_A2 = h2_set
-    h3_model, y_h3, sig_A3 = h3_set
-    h4_model, y_h4, sig_A4 = h4_set
-    # jax.debug.print("`V_model` shape: {x_norm}", x_norm=V_model.shape)
-    # jax.debug.print("V_model with nan: {x_norm}", x_norm=jnp.isnan(V_model).sum())
-    # jax.debug.print("`V_model`: {x_norm}", x_norm=V_model)
-    # jax.debug.print("`sigma_model`: {x_norm}", x_norm=sigma_model)
-    # jax.debug.print("`weights`: {x_norm}", x_norm=weights)
-    # jax.debug.print("`weights 16th`: {x_norm}", x_norm=jnp.percentile(weights, 16))
-    # jax.debug.print("`weights 84th`: {x_norm}", x_norm=jnp.percentile(weights, 84))
-    # jax.debug.print("weights with nan: {x_norm}", x_norm=jnp.isnan(weights).sum())
-
-
-
-    V_model = jnp.where(jnp.isnan(V_model), 0.0, V_model)
-    sigma_model = jnp.where(jnp.isnan(sigma_model), 0.0, sigma_model)
-    h3_model = jnp.where(jnp.isnan(h3_model), 0.0, h3_model)
-    h4_model = jnp.where(jnp.isnan(h4_model), 0.0, h4_model)
-    V_data, V_data_err = dict_data['V_data'], dict_data['V_data_err']
-    sigma_data, sigma_data_err = dict_data['sigma_data'], dict_data['sigma_data_err']
-    h1_data, h1_data_err = y_h1, sig_A1
-    h2_data, h2_data_err = y_h2, sig_A2
-    h3_data, h3_data_err = y_h3, sig_A3
-    h4_data, h4_data_err = y_h4, sig_A4
-
-
-    # jax.debug.print("V diff mean sigma_model: {x_norm}, {sigma}",
-    #                 x_norm=jnp.nanmean(jnp.fabs(V_model - V_data)), sigma=jnp.nanstd(jnp.fabs(V_model - V_data)))
-
-    # jax.debug.print("sigma diff mean sigma_model: {x_norm}, {sigma}",
-    #                 x_norm=jnp.nanmean(jnp.fabs(sigma_model - sigma_data)), sigma=jnp.nanstd(jnp.fabs(sigma_model - sigma_data)))
-
-    # jax.debug.print("h3 diff mean sigma_model: {x_norm}, {sigma}",
-    #                 x_norm=jnp.nanmean(jnp.fabs(h3_model - h3_data)), sigma=jnp.nanstd(jnp.fabs(h3_model - h3_data)))
-
-    # jax.debug.print("h4 diff mean sigma_model: {x_norm}, {sigma}",
-    #                 x_norm=jnp.nanmean(jnp.fabs(h4_model - h4_data)), sigma=jnp.nanstd(jnp.fabs(h4_model - h4_data)))
-
-
-    # frac_err_min = 0.1
-    V_err_min = 10
-    sigma_err_min = 5
-    V_data_err = jnp.where(V_err_min > V_data_err, V_err_min, V_data_err)
-    sigma_data_err = jnp.where(sigma_err_min > sigma_data_err, sigma_err_min, sigma_data_err)
-
-    res_density = ((density_2DXY - y_xy) / (sig_xy + EPSILON))**2
-    res_V = ((V_model - V_data) / (V_data_err + 1e-3))**2
-    res_sigma = ((sigma_model - sigma_data) / (sigma_data_err + 1e-3))**2
-    res_h1 = ((h1_model - h1_data) / (h1_data_err + 1e-3))**2
-    res_h2 = ((h2_model - h2_data) / (h2_data_err + 1e-3))**2
-    res_h3 = ((h3_model - h3_data) / (h3_data_err + 1e-3))**2
-    res_h4 = ((h4_model - h4_data) / (h4_data_err + 1e-3))**2    
-
-    res_density = jnp.where(res_density<jnp.percentile(res_density, 98.0), res_density, 0)
-    res_h1 = jnp.where(res_h1<jnp.percentile(res_h1, 98.0), res_h1, 0)
-    res_h2 = jnp.where(res_h2<jnp.percentile(res_h2, 98.0), res_h2, 0)
-    res_h3 = jnp.where(res_h3<jnp.percentile(res_h3, 98.0), res_h3, 0)
-    res_h4 = jnp.where(res_h4<jnp.percentile(res_h4, 98.0), res_h4, 0)
-
-    val1 = jnp.nansum( -0.5 * res_density ) / len(density_2DXY)
-    val2 = jnp.nansum( -0.5 * res_V ) / len(V_model)
-    val3 = jnp.nansum( -0.5 * res_sigma ) / len(sigma_model)
-    val4 = jnp.nansum( -0.5 * res_h1 ) / len(h1_model)
-    val5 = jnp.nansum( -0.5 * res_h2 ) / len(h2_model)
-    val6 = jnp.nansum( -0.5 * res_h3 ) / len(h3_model)
-    val7 = jnp.nansum( -0.5 * res_h4 ) / len(h4_model)
-
-    log_likelihood = 0
-    log_likelihood += val1 + val4 + val5 + val6 + val7
-    # jax.debug.print("Log-likelihood components: h1={val4}, h2={val5}, h3={val6}, h4={val7}, tot={tot}",
-    #                 val4=val4, val5=val5, val6=val6, val7=val7, tot=log_likelihood)
-
-    return log_likelihood
-
-
-
 @partial(jax.jit, static_argnames=('num_Vbin'))
 def projection(density_param, dict_data, num_Vbin):
 
     alpha, beta, gamma = density_param['alpha'], density_param['beta'], density_param['gamma']
     rotation_matrix = makeRotationMatrix(alpha, beta, gamma)
 
+    density_param_disc = {
+        'rho0_disc': density_param['rho0_disc'],
+        'Rd_disc': density_param['Rd_disc'],
+        'hz_disc': density_param['hz_disc'],
+        'x_origin': 0.0,
+        'y_origin': 0.0,
+        'z_origin': 0.0,
+        'dirx': 0.0,
+        'diry': 0.0,
+        'dirz': 1.0,
+    }
+
+    density_param_bulge = {
+        'logM_bulge': density_param['logM_bulge'],
+        'Rs_bulge': density_param['Rs_bulge'],
+        'x_origin': 0.0,
+        'y_origin': 0.0,
+        'z_origin': 0.0,
+        'dirx': 0.0,
+        'diry': 0.0,
+        'dirz': 1.0,
+    }
+
     @jax.jit
-    def density_func_rot(X, Y, Z, rotation_matrix, param):
+    def density_func_rot(X, Y, Z, rotation_matrix, param_disc, param_bulge):
         pos = jnp.stack([X, Y, Z], axis=-1)
         x, y, z = (rotation_matrix.T @ pos.T)
-        return DoubleExponentialDisk_density(x, y, z, param)
+        return DoubleExponentialDisk_density(x, y, z, param_disc) + Hernquist_density(x, y, z, param_bulge)
     
     @partial(jax.jit, static_argnames=['rho_fct'])
-    def get_surface_density(X_grid, Y_grid, rho_fct, dict_params, dX, dY, sample):
+    def get_surface_density(X_grid, Y_grid, rho_fct, dict_params_disc, dict_params_bulge, dX, dY, sample):
         x_samples = X_grid + (sample[1:,0] - 0.5) * dX
         y_samples = 0      + (sample[1:,1] - 0.5) * 40  # +/-20 kpc
         z_samples = Y_grid + (sample[1:,2] - 0.5) * dY
 
-        density_samples = rho_fct(x_samples, y_samples, z_samples, rotation_matrix, dict_params)
+        density_samples = rho_fct(x_samples, y_samples, z_samples, rotation_matrix, dict_params_disc, dict_params_bulge)
         mass_tot = jnp.sum(density_samples * dX * dY * 40) / x_samples.shape[0]
         surface_density = mass_tot / (dX*dY*1e6)
         return surface_density
@@ -910,8 +820,8 @@ def projection(density_param, dict_data, num_Vbin):
     num_per_bin = dict_data['num_per_bin']
     bin_mapping = dict_data['bin_mapping']
 
-    surface_density_model = jax.vmap(get_surface_density, in_axes=[0, 0, None, None, None, None, None])(
-                X_grid, Y_grid, density_func_rot, density_param, dX, dY, sample_for_integration
+    surface_density_model = jax.vmap(get_surface_density, in_axes=[0, 0, None, None, None, None, None, None])(
+                X_grid, Y_grid, density_func_rot, density_param_disc, density_param_bulge, dX, dY, sample_for_integration
     )
     surface_density_model = jnp.array(surface_density_model)
 

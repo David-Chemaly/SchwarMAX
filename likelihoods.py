@@ -140,13 +140,15 @@ def logl_angular_input(params, dict_data, num_Vbin):
 
     logM_halo = params[0]
     logrho0_disc = params[1]
-    logRs_halo = params[2]
-    logRs_disk = params[3]
-    logHs_disk = params[4]
-    alpha = params[5]
-    beta = params[6]
-    gamma = params[7]
-    log_light_to_mass_ratio = params[8]
+    logM_bulge = params[2]
+    logRs_halo = params[3]
+    logRs_disk = params[4]
+    logHs_disk = params[5]
+    logRs_bulge = params[6]
+    alpha = params[7]
+    beta = params[8]
+    gamma = params[9]
+    log_light_to_mass_ratio = params[10]
 
     alpha = alpha * 180 / jnp.pi
     beta = beta * 180 / jnp.pi
@@ -166,10 +168,10 @@ def logl_angular_input(params, dict_data, num_Vbin):
         'dirz':1.0
     }
 
-    params_disk_rho = {
-        'rho0': 10 ** logrho0_disc,
-        'Rd': 10 ** logRs_disk,
-        'hz': 10 ** logHs_disk,
+    params_baryon_rho = {
+        'rho0_disc': 10 ** logrho0_disc,
+        'Rd_disc': 10 ** logRs_disk,
+        'hz_disc': 10 ** logHs_disk,
         'light_to_mass_ratio': 10 ** log_light_to_mass_ratio,
         'x_origin': 0.0,
         'y_origin': 0.0,
@@ -179,10 +181,12 @@ def logl_angular_input(params, dict_data, num_Vbin):
         'dirz': 1.0,
         'alpha': alpha,
         'beta': beta,
-        'gamma': gamma
+        'gamma': gamma,
+        'logM_bulge': logM_bulge,
+        'Rs_bulge': 10 ** logRs_bulge,
     }
 
-    surface_density_model = projection(params_disk_rho, dict_data, num_Vbin)
+    surface_density_model = projection(params_baryon_rho, dict_data, num_Vbin)
     surface_density_gt = dict_data['XY_density_data']
 
     chi2 = jnp.sum((surface_density_gt - surface_density_model)**2 / (0.1 * surface_density_gt)**2)
@@ -194,7 +198,7 @@ def logl_angular_input(params, dict_data, num_Vbin):
     def true_func():
         return -jnp.inf
     def false_func():
-        density_set, V_model, sigma_model, h1_set, h2_set, h3_set, h4_set, _weights = model(params_halo_pot, params_disk_rho, dict_data, num_Vbin)
+        density_set, V_model, sigma_model, h1_set, h2_set, h3_set, h4_set, _weights = model(params_halo_pot, params_baryon_rho, dict_data, num_Vbin)
 
         def _true_func():
             return -jnp.inf
@@ -251,17 +255,19 @@ def logl_angular_input(params, dict_data, num_Vbin):
 def logl_density(params, dict_data, num_Vbin):
 
     logrho0_disc = params[0]
-    logRd_disc = params[1]
-    loghz_disc = params[2]
-    alpha = params[3] * 180 / jnp.pi
-    beta = params[4] * 180 / jnp.pi
-    gamma = params[5] * 180 / jnp.pi
+    logM_bulge = params[1]
+    logRd_disc = params[2]
+    loghz_disc = params[3]
+    logRs_bulge = params[4]
+    alpha = params[5] * 180 / jnp.pi
+    beta = params[6] * 180 / jnp.pi
+    gamma = params[7] * 180 / jnp.pi
 
 
-    params_disc = {
-        'rho0': 10.0**logrho0_disc,
-        'Rd': 10.0**logRd_disc,
-        'hz': 10.0**loghz_disc,
+    density_param = {
+        'rho0_disc': 10.0**logrho0_disc,
+        'Rd_disc': 10.0**logRd_disc,
+        'hz_disc': 10.0**loghz_disc,
         'x_origin': 0.0,
         'y_origin': 0.0,
         'z_origin': 0.0,
@@ -272,9 +278,11 @@ def logl_density(params, dict_data, num_Vbin):
         'beta': beta,
         'gamma': gamma,
         'light_to_mass_ratio': 1,
+        'logM_bulge': logM_bulge,
+        'Rs_bulge': 10 ** logRs_bulge,
     }
 
-    surface_density_model = projection(params_disc, dict_data, num_Vbin)
+    surface_density_model = projection(density_param, dict_data, num_Vbin)
     surface_density_gt = dict_data['XY_density_data']
 
     chi2 = jnp.sum((surface_density_gt - surface_density_model)**2 / (0.1 * surface_density_gt)**2)
