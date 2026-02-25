@@ -386,11 +386,8 @@ def solve_fista(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
 @partial(jax.jit, static_argnames=('num_Vbin'))
 def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
 
-
-    w0_lres = dict_data['w0_lres']
-    n_particles_lres = w0_lres.shape[0]
-    w0_hres = dict_data['w0_hres']
-    n_particles_hres = w0_hres.shape[0]
+    w0 = dict_data['w0']
+    n_particles = w0.shape[0]
     v0 = dict_data['v0']
     s = dict_data['s']
     num_per_bin = dict_data['num_per_bin']
@@ -420,10 +417,24 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
         x, y, vx, vy = getCartesianFromCylindrical_clockwise(jnp.sqrt(w0[:,0]**2 + w0[:,1]**2), jnp.arctan2(w0[:,1], w0[:,0]), vR, vphi)
         return jnp.array([x, y, w0[:,2], vx, vy, vz]).T
     key1, key2, key3 = jax.random.PRNGKey(42), jax.random.PRNGKey(109), jax.random.PRNGKey(2026)
-    w0_new_lres = get_w0_new(w0_lres, key1, key2, key3, n_particles_lres)
-    key1, key2, key3 = jax.random.PRNGKey(10010), jax.random.PRNGKey(10086), jax.random.PRNGKey(999)
-    w0_new_hres = get_w0_new(w0_hres, key1, key2, key3, n_particles_hres)
+    w0_new = get_w0_new(w0, key1, key2, key3, n_particles)
 
+    #======================================== Calculate orbital timescale =====================================================
+    _R = jnp.sqrt(w0_new[:,0]**2 + w0_new[:,1]**2)
+    _z = w0_new[:,2]
+
+    T_orb = jax.vmap(estimate_orbital_timescale, in_axes=(0, None, None, 0))(
+        _R,
+        potential_func,
+        (dict_phi, params_halo_pot),
+        _z
+    )
+
+    N_step_per_orb = 50
+    N_dynamical_time = 40
+    dt = T_orb / N_step_per_orb
+    time_integrate = T_orb * N_dynamical_time
+    N_steps = N_step_per_orb * N_dynamical_time
     #=========================================== Integrate orbits =======================================================
     @jax.jit
     def acc_fn(x, y, z):
@@ -432,7 +443,7 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
         return a_halo + a_disk
 
     _integrate_vmap = jax.vmap(integrate_leapfrog_rot, 
-                            in_axes=(0, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None))
+                            in_axes=(0, None, None, 0, None, None, None, None, None, None, None, None, None, None, None, None, None))
 
     Rzphi_lim_grid = jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]])
     xy_lim_grid = jnp.array([[-12.,12.],[-4.,4.]])
@@ -440,50 +451,23 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     xy_n_grid = jnp.array([60,40])
     Rzphi_n_tot = 360
 
-    time = 10. #Gyr
-    n_steps = 2500
-    dt = time / n_steps
+    time = time_integrate #Gyr
+    n_steps = N_steps
+    dt = dt
     unroll = False
     initial_time = 0.0
     Rzphi_bin_counts, surface_density, h1, h2, h3, h4 = _integrate_vmap(
-                        w0_new_lres, acc_fn, n_steps, dt, initial_time, unroll,
+                        w0_new, acc_fn, n_steps, dt, initial_time, unroll,
                         num_Vbin, bin_mapping, num_per_bin,
                         Rzphi_lim_grid, xy_lim_grid,
                         Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
                         v0, s, rotation_matrix)
-    A_Rzphi_lres = Rzphi_bin_counts / n_steps
-    A_xy_lres = surface_density / n_steps
-    A_h1_lres = h1
-    A_h2_lres = h2
-    A_h3_lres = h3
-    A_h4_lres = h4
-
-    n_steps = 10000
-    dt = time / n_steps
-    Rzphi_bin_counts, surface_density, h1, h2, h3, h4 = _integrate_vmap(
-                        w0_new_hres, acc_fn, n_steps, dt, initial_time, unroll,
-                        num_Vbin, bin_mapping, num_per_bin,
-                        Rzphi_lim_grid, xy_lim_grid,
-                        Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
-                        v0, s, rotation_matrix)
-    A_Rzphi_hres = Rzphi_bin_counts / n_steps
-    A_xy_hres = surface_density / n_steps
-    A_h1_hres = h1
-    A_h2_hres = h2
-    A_h3_hres = h3
-    A_h4_hres = h4
-
-    # jax.debug.print("A_Rzphi_lres", A_Rzphi_lres.shape)
-    # jax.debug.print("A_Rzphi_hres", A_Rzphi_hres.shape)
-    # jax.debug.print("A_xy_lres", A_xy_lres.shape)
-    # jax.debug.print("A_xy_hres", A_xy_hres.shape)
-
-    A_Rzphi = jnp.vstack([A_Rzphi_lres, A_Rzphi_hres]).T
-    A_xy = jnp.vstack([A_xy_lres, A_xy_hres]).T
-    A_h1 = jnp.vstack([A_h1_lres, A_h1_hres]).T
-    A_h2 = jnp.vstack([A_h2_lres, A_h2_hres]).T
-    A_h3 = jnp.vstack([A_h3_lres, A_h3_hres]).T
-    A_h4 = jnp.vstack([A_h4_lres, A_h4_hres]).T 
+    A_Rzphi = Rzphi_bin_counts.T / n_steps
+    A_xy = surface_density.T / n_steps
+    A_h1 = h1.T
+    A_h2 = h2.T
+    A_h3 = h3.T
+    A_h4 = h4.T
 
     #=========================================== Orbital weights optimisation ============================================
 
@@ -592,10 +576,8 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
 @partial(jax.jit, static_argnames=('num_Vbin'))
 def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
 
-    w0_lres = dict_data['w0_lres']
-    n_particles_lres = w0_lres.shape[0]
-    w0_hres = dict_data['w0_hres']
-    n_particles_hres = w0_hres.shape[0]
+    w0 = dict_data['w0']
+    n_particles = w0.shape[0]
     v0 = dict_data['v0']
     s = dict_data['s']
     num_per_bin = dict_data['num_per_bin']
@@ -625,10 +607,24 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
         x, y, vx, vy = getCartesianFromCylindrical_clockwise(jnp.sqrt(w0[:,0]**2 + w0[:,1]**2), jnp.arctan2(w0[:,1], w0[:,0]), vR, vphi)
         return jnp.array([x, y, w0[:,2], vx, vy, vz]).T
     key1, key2, key3 = jax.random.PRNGKey(42), jax.random.PRNGKey(109), jax.random.PRNGKey(2026)
-    w0_new_lres = get_w0_new(w0_lres, key1, key2, key3, n_particles_lres)
-    key1, key2, key3 = jax.random.PRNGKey(10010), jax.random.PRNGKey(10086), jax.random.PRNGKey(999)
-    w0_new_hres = get_w0_new(w0_hres, key1, key2, key3, n_particles_hres)
+    w0_new = get_w0_new(w0, key1, key2, key3, n_particles)
 
+    #======================================== Calculate orbital timescale =====================================================
+    _R = jnp.sqrt(w0_new[:,0]**2 + w0_new[:,1]**2)
+    _z = w0_new[:,2]
+
+    T_orb = jax.vmap(estimate_orbital_timescale, in_axes=(0, None, None, 0))(
+        _R,
+        potential_func,
+        (dict_phi, params_halo_pot),
+        _z
+    )
+
+    N_step_per_orb = 50
+    N_dynamical_time = 40
+    dt = T_orb / N_step_per_orb
+    time_integrate = T_orb * N_dynamical_time
+    N_steps = N_step_per_orb * N_dynamical_time
     #=========================================== Integrate orbits =======================================================
     @jax.jit
     def acc_fn(x, y, z):
@@ -637,7 +633,7 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
         return a_halo + a_disk
 
     _integrate_vmap = jax.vmap(integrate_leapfrog_rot, 
-                            in_axes=(0, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None))
+                            in_axes=(0, None, None, 0, None, None, None, None, None, None, None, None, None, None, None, None, None))
 
     Rzphi_lim_grid = jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]])
     xy_lim_grid = jnp.array([[-12.,12.],[-4.,4.]])
@@ -645,50 +641,23 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     xy_n_grid = jnp.array([60,40])
     Rzphi_n_tot = 360
 
-    time = 10. #Gyr
-    n_steps = 2500
-    dt = time / n_steps
+    time = time_integrate #Gyr
+    n_steps = N_steps
+    dt = dt
     unroll = False
     initial_time = 0.0
     Rzphi_bin_counts, surface_density, h1, h2, h3, h4 = _integrate_vmap(
-                        w0_new_lres, acc_fn, n_steps, dt, initial_time, unroll,
+                        w0_new, acc_fn, n_steps, dt, initial_time, unroll,
                         num_Vbin, bin_mapping, num_per_bin,
                         Rzphi_lim_grid, xy_lim_grid,
                         Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
                         v0, s, rotation_matrix)
-    A_Rzphi_lres = Rzphi_bin_counts / n_steps
-    A_xy_lres = surface_density / n_steps
-    A_h1_lres = h1
-    A_h2_lres = h2
-    A_h3_lres = h3
-    A_h4_lres = h4
-
-    n_steps = 10000
-    dt = time / n_steps
-    Rzphi_bin_counts, surface_density, h1, h2, h3, h4 = _integrate_vmap(
-                        w0_new_hres, acc_fn, n_steps, dt, initial_time, unroll,
-                        num_Vbin, bin_mapping, num_per_bin,
-                        Rzphi_lim_grid, xy_lim_grid,
-                        Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
-                        v0, s, rotation_matrix)
-    A_Rzphi_hres = Rzphi_bin_counts / n_steps
-    A_xy_hres = surface_density / n_steps
-    A_h1_hres = h1
-    A_h2_hres = h2
-    A_h3_hres = h3
-    A_h4_hres = h4
-
-    # jax.debug.print("A_Rzphi_lres", A_Rzphi_lres.shape)
-    # jax.debug.print("A_Rzphi_hres", A_Rzphi_hres.shape)
-    # jax.debug.print("A_xy_lres", A_xy_lres.shape)
-    # jax.debug.print("A_xy_hres", A_xy_hres.shape)
-
-    A_Rzphi = jnp.vstack([A_Rzphi_lres, A_Rzphi_hres]).T
-    A_xy = jnp.vstack([A_xy_lres, A_xy_hres]).T
-    A_h1 = jnp.vstack([A_h1_lres, A_h1_hres]).T
-    A_h2 = jnp.vstack([A_h2_lres, A_h2_hres]).T
-    A_h3 = jnp.vstack([A_h3_lres, A_h3_hres]).T
-    A_h4 = jnp.vstack([A_h4_lres, A_h4_hres]).T 
+    A_Rzphi = Rzphi_bin_counts.T / n_steps
+    A_xy = surface_density.T / n_steps
+    A_h1 = h1.T
+    A_h2 = h2.T
+    A_h3 = h3.T
+    A_h4 = h4.T
 
     #=========================================== Orbital weights optimisation ============================================
 
