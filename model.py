@@ -209,7 +209,7 @@ def _nll_z(z,
     #                 tot=val1 + val2 + val3 + val4 + val5 + val6 + regularisation_factor)
 
 
-    return val2 + regularisation_factor#val1 +  + val3 + val4 + val5 + val6
+    return val1 + val2 + val3 + val4 + val5 + val6 + regularisation_factor#
 _nll_z = jax.value_and_grad(_nll_z)
 
 @jax.jit
@@ -386,8 +386,11 @@ def solve_fista(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
 @partial(jax.jit, static_argnames=('num_Vbin'))
 def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
 
-    w0 = dict_data['w0']
-    n_particles = w0.shape[0]
+
+    w0_lres = dict_data['w0_lres']
+    n_particles_lres = w0_lres.shape[0]
+    w0_hres = dict_data['w0_hres']
+    n_particles_hres = w0_hres.shape[0]
     v0 = dict_data['v0']
     s = dict_data['s']
     num_per_bin = dict_data['num_per_bin']
@@ -398,7 +401,7 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
 
     #=========================================== GET DISC POTENTIAL =====================================================
 
-    NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax = 50, 30, 1e-2, 30.0, 1e-3, 15.0, 8.
+    NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax = 50, 30, 1e-2, 30.0, 1e-2, 15.0, 8.
     Nphi = 200
     N_int = 10_000
     dict_phi = get_phi_m(density_func, params_disk_rho, NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax, Nphi, N_int)
@@ -407,38 +410,19 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
 
     get_jeans_moments_vmap = jax.vmap(get_jeans_moments, in_axes=(0,0,0,None,None,None,None))
     # jeans_moments = get_jeans_moments(x_p, y_p, z_p, dict_phi, params_disk_rho,params_halo_pot, anisotropy_b=1.0)
-    jeans_moments = get_jeans_moments_vmap(w0[:,0], w0[:,1], w0[:,2], dict_phi, params_disk_rho, params_halo_pot, 1.)
-
-    v_rot, sig_R, sig_z, sig_phi = jeans_moments
+    def get_w0_new(w0, key1, key2, key3, n_particles):
+        jeans_moments = get_jeans_moments_vmap(w0[:,0], w0[:,1], w0[:,2], dict_phi, params_disk_rho, params_halo_pot, 1.)
+        v_rot, sig_R, sig_z, sig_phi = jeans_moments
+        g1, g2, g3 = jax.random.normal(key1, (n_particles,)), jax.random.normal(key2, (n_particles,)), jax.random.normal(key3, (n_particles,))
+        vR = g1 * sig_R # 2 sigma dispersion
+        vz = g2 * sig_z
+        vphi = v_rot + g3 * sig_phi
+        x, y, vx, vy = getCartesianFromCylindrical_clockwise(jnp.sqrt(w0[:,0]**2 + w0[:,1]**2), jnp.arctan2(w0[:,1], w0[:,0]), vR, vphi)
+        return jnp.array([x, y, w0[:,2], vx, vy, vz]).T
     key1, key2, key3 = jax.random.PRNGKey(42), jax.random.PRNGKey(109), jax.random.PRNGKey(2026)
-    g1, g2, g3 = jax.random.normal(key1, (n_particles,)), jax.random.normal(key2, (n_particles,)), jax.random.normal(key3, (n_particles,))
-    vR = g1 * sig_R # 2 sigma dispersion
-    vz = g2 * sig_z
-    vphi = v_rot + g3 * sig_phi
-    # g1, g2, g3 = (jax.random.uniform(key1, (n_particles,))-0.5)*2, (jax.random.uniform(key2, (n_particles,))-0.5)*2, (jax.random.uniform(key3, (n_particles,))-0.5)*2
-    # vR = g1 * sig_R * 2 # 2 sigma dispersion
-    # vz = g2 * sig_z * 2
-    # vphi = v_rot + g3 * sig_phi * 2
-
-    x, y, vx, vy = getCartesianFromCylindrical_clockwise(jnp.sqrt(w0[:,0]**2 + w0[:,1]**2), jnp.arctan2(w0[:,1], w0[:,0]), vR, vphi)
-
-    w0_new = jnp.array([x, y, w0[:,2], vx, vy, vz]).T
-
-    #===================================== Calculate orbital timescale =======================================================
-
-    _R = jnp.sqrt(dict_data['w0'][:,0]**2 + dict_data['w0'][:,1]**2)
-    _z = dict_data['w0'][:,2]
-
-    T_orb = jax.vmap(estimate_orbital_timescale, in_axes=(0, None, None, 0))(
-        _R,
-        potential_func,
-        (dict_phi, params_halo_pot),
-        _z
-    )
-    T_orb = T_orb * 1e3 # convert from Gyr to Myr
-
-    w0_hres = w0_new[T_orb<40] # need at least 10 steps per orbit for accurate integration
-    w0_lres = w0_new[T_orb>=40]
+    w0_new_lres = get_w0_new(w0_lres, key1, key2, key3, n_particles_lres)
+    key1, key2, key3 = jax.random.PRNGKey(10010), jax.random.PRNGKey(10086), jax.random.PRNGKey(999)
+    w0_new_hres = get_w0_new(w0_hres, key1, key2, key3, n_particles_hres)
 
     #=========================================== Integrate orbits =======================================================
     @jax.jit
@@ -447,47 +431,59 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
         a_disk = get_acc(x, y, z, dict_phi)
         return a_halo + a_disk
 
+    _integrate_vmap = jax.vmap(integrate_leapfrog_rot, 
+                            in_axes=(0, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None))
+
+    Rzphi_lim_grid = jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]])
+    xy_lim_grid = jnp.array([[-12.,12.],[-4.,4.]])
+    Rzphi_n_grid = jnp.array([10,6,6])
+    xy_n_grid = jnp.array([60,40])
+    Rzphi_n_tot = 360
+
     time = 10. #Gyr
     n_steps = 2500
     dt = time / n_steps
     unroll = False
     initial_time = 0.0
-    Rzphi_bin_counts, surface_density, h1, h2, h3, h4 = jax.vmap(integrate_leapfrog_rot, 
-                                                     in_axes=(0, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None))\
-                        (w0_lres, acc_fn, n_steps, dt, initial_time, unroll,
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4 = _integrate_vmap(
+                        w0_new_lres, acc_fn, n_steps, dt, initial_time, unroll,
                         num_Vbin, bin_mapping, num_per_bin,
-                        jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]]), jnp.array([[-12.,12.],[-4.,4.]]),
-                        jnp.array([10,6,6]), jnp.array([60,40]), 360,
+                        Rzphi_lim_grid, xy_lim_grid,
+                        Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
                         v0, s, rotation_matrix)
-    A_Rzphi_lres = Rzphi_bin_counts.T / n_steps
-    A_xy_lres = surface_density.T / n_steps
-    A_h1_lres = h1.T
-    A_h2_lres = h2.T
-    A_h3_lres = h3.T
-    A_h4_lres = h4.T
+    A_Rzphi_lres = Rzphi_bin_counts / n_steps
+    A_xy_lres = surface_density / n_steps
+    A_h1_lres = h1
+    A_h2_lres = h2
+    A_h3_lres = h3
+    A_h4_lres = h4
 
     n_steps = 10000
     dt = time / n_steps
-    Rzphi_bin_counts, surface_density, h1, h2, h3, h4 = jax.vmap(integrate_leapfrog_rot, 
-                                                     in_axes=(0, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None))\
-                        (w0_hres, acc_fn, n_steps, dt, initial_time, unroll,
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4 = _integrate_vmap(
+                        w0_new_hres, acc_fn, n_steps, dt, initial_time, unroll,
                         num_Vbin, bin_mapping, num_per_bin,
-                        jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]]), jnp.array([[-12.,12.],[-4.,4.]]),
-                        jnp.array([10,6,6]), jnp.array([60,40]), 360,
+                        Rzphi_lim_grid, xy_lim_grid,
+                        Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
                         v0, s, rotation_matrix)
-    A_Rzphi_hres = Rzphi_bin_counts.T / n_steps
-    A_xy_hres = surface_density.T / n_steps
-    A_h1_hres = h1.T
-    A_h2_hres = h2.T
-    A_h3_hres = h3.T
-    A_h4_hres = h4.T
+    A_Rzphi_hres = Rzphi_bin_counts / n_steps
+    A_xy_hres = surface_density / n_steps
+    A_h1_hres = h1
+    A_h2_hres = h2
+    A_h3_hres = h3
+    A_h4_hres = h4
 
-    A_Rzphi = jnp.stack([A_Rzphi_lres, A_Rzphi_hres], axis=0)
-    A_xy = jnp.stack([A_xy_lres, A_xy_hres], axis=0)
-    A_h1 = jnp.stack([A_h1_lres, A_h1_hres], axis=0)
-    A_h2 = jnp.stack([A_h2_lres, A_h2_hres], axis=0)
-    A_h3 = jnp.stack([A_h3_lres, A_h3_hres], axis=0)
-    A_h4 = jnp.stack([A_h4_lres, A_h4_hres], axis=0)
+    # jax.debug.print("A_Rzphi_lres", A_Rzphi_lres.shape)
+    # jax.debug.print("A_Rzphi_hres", A_Rzphi_hres.shape)
+    # jax.debug.print("A_xy_lres", A_xy_lres.shape)
+    # jax.debug.print("A_xy_hres", A_xy_hres.shape)
+
+    A_Rzphi = jnp.vstack([A_Rzphi_lres, A_Rzphi_hres]).T
+    A_xy = jnp.vstack([A_xy_lres, A_xy_hres]).T
+    A_h1 = jnp.vstack([A_h1_lres, A_h1_hres]).T
+    A_h2 = jnp.vstack([A_h2_lres, A_h2_hres]).T
+    A_h3 = jnp.vstack([A_h3_lres, A_h3_hres]).T
+    A_h4 = jnp.vstack([A_h4_lres, A_h4_hres]).T 
 
     #=========================================== Orbital weights optimisation ============================================
 
@@ -596,8 +592,10 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
 @partial(jax.jit, static_argnames=('num_Vbin'))
 def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
 
-    w0 = dict_data['w0']
-    n_particles = w0.shape[0]
+    w0_lres = dict_data['w0_lres']
+    n_particles_lres = w0_lres.shape[0]
+    w0_hres = dict_data['w0_hres']
+    n_particles_hres = w0_hres.shape[0]
     v0 = dict_data['v0']
     s = dict_data['s']
     num_per_bin = dict_data['num_per_bin']
@@ -608,7 +606,7 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
 
     #=========================================== GET DISC POTENTIAL =====================================================
 
-    NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax = 70, 70, 1e-2, 30.0, 1e-2, 15.0, 8.
+    NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax = 50, 30, 1e-2, 30.0, 1e-2, 15.0, 8.
     Nphi = 200
     N_int = 10_000
     dict_phi = get_phi_m(density_func, params_disk_rho, NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax, Nphi, N_int)
@@ -617,39 +615,19 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
 
     get_jeans_moments_vmap = jax.vmap(get_jeans_moments, in_axes=(0,0,0,None,None,None,None))
     # jeans_moments = get_jeans_moments(x_p, y_p, z_p, dict_phi, params_disk_rho,params_halo_pot, anisotropy_b=1.0)
-    jeans_moments = get_jeans_moments_vmap(w0[:,0], w0[:,1], w0[:,2], dict_phi, params_disk_rho, params_halo_pot, 1.)
-
-    v_rot, sig_R, sig_z, sig_phi = jeans_moments
+    def get_w0_new(w0, key1, key2, key3, n_particles):
+        jeans_moments = get_jeans_moments_vmap(w0[:,0], w0[:,1], w0[:,2], dict_phi, params_disk_rho, params_halo_pot, 1.)
+        v_rot, sig_R, sig_z, sig_phi = jeans_moments
+        g1, g2, g3 = jax.random.normal(key1, (n_particles,)), jax.random.normal(key2, (n_particles,)), jax.random.normal(key3, (n_particles,))
+        vR = g1 * sig_R # 2 sigma dispersion
+        vz = g2 * sig_z
+        vphi = v_rot + g3 * sig_phi
+        x, y, vx, vy = getCartesianFromCylindrical_clockwise(jnp.sqrt(w0[:,0]**2 + w0[:,1]**2), jnp.arctan2(w0[:,1], w0[:,0]), vR, vphi)
+        return jnp.array([x, y, w0[:,2], vx, vy, vz]).T
     key1, key2, key3 = jax.random.PRNGKey(42), jax.random.PRNGKey(109), jax.random.PRNGKey(2026)
-    g1, g2, g3 = jax.random.normal(key1, (n_particles,)), jax.random.normal(key2, (n_particles,)), jax.random.normal(key3, (n_particles,))
-    vR = g1 * sig_R # 2 sigma dispersion
-    vz = g2 * sig_z
-    vphi = v_rot + g3 * sig_phi
-    # g1, g2, g3 = (jax.random.uniform(key1, (n_particles,))-0.5)*2, (jax.random.uniform(key2, (n_particles,))-0.5)*2, (jax.random.uniform(key3, (n_particles,))-0.5)*2
-    # vR = g1 * sig_R * 2 # 2 sigma dispersion
-    # vz = g2 * sig_z * 2
-    # vphi = v_rot + g3 * sig_phi * 2
-
-    x, y, vx, vy = getCartesianFromCylindrical_clockwise(jnp.sqrt(w0[:,0]**2 + w0[:,1]**2), jnp.arctan2(w0[:,1], w0[:,0]), vR, vphi)
-
-    w0_new = jnp.array([x, y, w0[:,2], vx, vy, vz]).T
-
-    #===================================== Calculate orbital timescale =======================================================
-
-    _R = jnp.sqrt(dict_data['w0'][:,0]**2 + dict_data['w0'][:,1]**2)
-    _z = dict_data['w0'][:,2]
-
-    T_orb = jax.vmap(estimate_orbital_timescale, in_axes=(0, None, None, 0))(
-        _R,
-        potential_func,
-        (dict_phi, params_halo_pot),
-        _z
-    )
-    T_orb = T_orb * 1e3 # convert from Gyr to Myr
-
-    mask_hires = T_orb < 40
-
-    n_steps_orb = jnp.where(mask_hires, 10000, 2500) # set number of steps based on orbital timescale, to ensure accurate integration
+    w0_new_lres = get_w0_new(w0_lres, key1, key2, key3, n_particles_lres)
+    key1, key2, key3 = jax.random.PRNGKey(10010), jax.random.PRNGKey(10086), jax.random.PRNGKey(999)
+    w0_new_hres = get_w0_new(w0_hres, key1, key2, key3, n_particles_hres)
 
     #=========================================== Integrate orbits =======================================================
     @jax.jit
@@ -658,25 +636,59 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
         a_disk = get_acc(x, y, z, dict_phi)
         return a_halo + a_disk
 
+    _integrate_vmap = jax.vmap(integrate_leapfrog_rot, 
+                            in_axes=(0, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None))
+
+    Rzphi_lim_grid = jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]])
+    xy_lim_grid = jnp.array([[-12.,12.],[-4.,4.]])
+    Rzphi_n_grid = jnp.array([10,6,6])
+    xy_n_grid = jnp.array([60,40])
+    Rzphi_n_tot = 360
+
     time = 10. #Gyr
-    # n_steps = 2500
-    dt = time / n_steps_orb
+    n_steps = 2500
+    dt = time / n_steps
     unroll = False
     initial_time = 0.0
-    Rzphi_bin_counts, surface_density, h1, h2, h3, h4 = jax.vmap(integrate_leapfrog_rot, 
-                                                     in_axes=(0, None, 0, None, None, None, None, None, None, None, None, None, None, None, None, None, None))\
-                        (w0_new, acc_fn, n_steps_orb, dt, initial_time, unroll,
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4 = _integrate_vmap(
+                        w0_new_lres, acc_fn, n_steps, dt, initial_time, unroll,
                         num_Vbin, bin_mapping, num_per_bin,
-                        jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]]), jnp.array([[-12.,12.],[-4.,4.]]),
-                        jnp.array([10,6,6]), jnp.array([60,40]), 360,
+                        Rzphi_lim_grid, xy_lim_grid,
+                        Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
                         v0, s, rotation_matrix)
-    A_Rzphi = Rzphi_bin_counts.T / n_steps_orb
-    A_xy = surface_density.T / n_steps_orb
-    A_h1 = h1.T
-    A_h2 = h2.T
-    A_h3 = h3.T
-    A_h4 = h4.T
+    A_Rzphi_lres = Rzphi_bin_counts / n_steps
+    A_xy_lres = surface_density / n_steps
+    A_h1_lres = h1
+    A_h2_lres = h2
+    A_h3_lres = h3
+    A_h4_lres = h4
 
+    n_steps = 10000
+    dt = time / n_steps
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4 = _integrate_vmap(
+                        w0_new_hres, acc_fn, n_steps, dt, initial_time, unroll,
+                        num_Vbin, bin_mapping, num_per_bin,
+                        Rzphi_lim_grid, xy_lim_grid,
+                        Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
+                        v0, s, rotation_matrix)
+    A_Rzphi_hres = Rzphi_bin_counts / n_steps
+    A_xy_hres = surface_density / n_steps
+    A_h1_hres = h1
+    A_h2_hres = h2
+    A_h3_hres = h3
+    A_h4_hres = h4
+
+    # jax.debug.print("A_Rzphi_lres", A_Rzphi_lres.shape)
+    # jax.debug.print("A_Rzphi_hres", A_Rzphi_hres.shape)
+    # jax.debug.print("A_xy_lres", A_xy_lres.shape)
+    # jax.debug.print("A_xy_hres", A_xy_hres.shape)
+
+    A_Rzphi = jnp.vstack([A_Rzphi_lres, A_Rzphi_hres]).T
+    A_xy = jnp.vstack([A_xy_lres, A_xy_hres]).T
+    A_h1 = jnp.vstack([A_h1_lres, A_h1_hres]).T
+    A_h2 = jnp.vstack([A_h2_lres, A_h2_hres]).T
+    A_h3 = jnp.vstack([A_h3_lres, A_h3_hres]).T
+    A_h4 = jnp.vstack([A_h4_lres, A_h4_hres]).T 
 
     #=========================================== Orbital weights optimisation ============================================
 
@@ -733,7 +745,7 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     weights = solve_lbfgs_softplus(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
                                     y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
                                     sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-                                    l2=1, maxiter=500)
+                                    l2=10, maxiter=500)
     # weights = solve_two_stage(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
     #                                 y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
     #                                 sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
