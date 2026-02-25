@@ -97,9 +97,9 @@ def DoubleExponentialDiskx2FerrersBar_density(x, y, z, params):
     """
 
     thin_params = {
-        'Sigma0':     params['Sigma0_thin'],
-        'Rd':         params['Rd_thin'],
-        'hz':         params['hz_thin'],
+        'rho0_disc':     params['Sigma0_thin'],
+        'Rd_disc':         params['Rd_thin'],
+        'hz_disc':         params['hz_thin'],
         'x_origin':   params['x_origin_thin'],
         'y_origin':   params['y_origin_thin'],
         'z_origin':   params['z_origin_thin'],
@@ -110,9 +110,9 @@ def DoubleExponentialDiskx2FerrersBar_density(x, y, z, params):
     rho_thin  = DoubleExponentialDisk_density(x, y, z, thin_params)
 
     thick_params = thick_params = {
-        'Sigma0':     params['Sigma0_thick'],
-        'Rd':         params['Rd_thick'],
-        'hz':         params['hz_thick'],
+        'rho0_disc':     params['Sigma0_thick'],
+        'Rd_disc':         params['Rd_thick'],
+        'hz_disc':         params['hz_thick'],
         'x_origin':   params['x_origin_thick'],
         'y_origin':   params['y_origin_thick'],
         'z_origin':   params['z_origin_thick'],

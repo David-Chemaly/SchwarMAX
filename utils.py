@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 from functools import partial
 
-from constants import G, EPSILON
+from constants import G, EPSILON, TWOPI
 
 @jax.jit
 def get_mat(x, y, z):
@@ -115,6 +115,55 @@ def makeRotationMatrix(alpha, beta, gamma):
     alpha, beta, gamma = jnp.radians(alpha), jnp.radians(beta), jnp.radians(gamma)
     return (Rz(gamma) @ Rx(beta) @ Rz(alpha)).T   # X = R @ x
 
+
+@partial(jax.jit, static_argnames=("potential_fn",))
+def estimate_orbital_timescale(R, potential_fn, potential_args=(), z=0.0, dR=1e-3):
+    """
+    Order-of-magnitude orbital timescale from a gravitational potential.
+
+    Uses a local circular-orbit estimate:
+        Omega^2(R) = (1 / R) * dPhi/dR
+        T_orb(R)   = 2*pi / Omega
+
+    Parameters
+    ----------
+    R : float or array-like
+        Cylindrical radius (kpc).
+    potential_fn : callable
+        Function with signature:
+            potential_fn(x, y, z, *potential_args) -> Phi
+        and Phi in units of kpc^2 / Gyr^2.
+    potential_args : tuple, optional
+        Extra arguments forwarded to potential_fn.
+    z : float, optional
+        Height where dPhi/dR is evaluated (default 0.0).
+    dR : float, optional
+        Finite-difference step in kpc.
+
+    Returns
+    -------
+    T_orb : float or jnp.ndarray
+        Estimated orbital timescale in Gyr.
+    """
+    R = jnp.asarray(R)
+    R_shape = R.shape
+    R_flat = jnp.ravel(R)
+    R_safe = jnp.maximum(jnp.abs(R_flat), 2 * dR)
+    min_val = 1e-20
+
+    def phi_of_R_scalar(r):
+        return potential_fn(r, 0.0, z, *potential_args)
+
+    def dphi_dr_scalar(r):
+        return (phi_of_R_scalar(r + dR) - phi_of_R_scalar(r - dR)) / (2.0 * dR)
+
+    dPhi_dR = jax.vmap(dphi_dr_scalar)(R_safe)
+    omega2 = jnp.maximum(jnp.abs(dPhi_dR) / R_safe, min_val)
+    omega = jnp.sqrt(omega2)
+
+    T_orb = 2 * jnp.pi / omega
+    return jnp.reshape(T_orb, R_shape)
+
 def halo_mass_from_stellar_mass(M_star,
     N=0.0351, log10_M1=11.59, beta=1.376, gamma=0.608,
     mmin=1e9, mmax=3e16, tol=1e-6, max_iter=200):
@@ -137,4 +186,3 @@ def halo_mass_from_stellar_mass(M_star,
             return 10**((jnp.log10(a)+jnp.log10(b))/2)
 
     return 10**((jnp.log10(a)+jnp.log10(b))/2)
-
