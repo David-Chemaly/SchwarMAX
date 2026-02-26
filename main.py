@@ -1,5 +1,5 @@
 
-path = '/content/drive/MyDrive/SchwarMAX-MCMC/'
+path = './'
 
 import sys
 sys.path.append(path)
@@ -17,6 +17,7 @@ import jax.numpy.linalg as jnn
 import pandas as pd
 import numpy as np
 import scipy as sp
+from scipy.stats import qmc
 import pickle
 
 import emcee
@@ -63,7 +64,6 @@ def get_dict_data(path):
     dphi = np.unique(phi_grid)[1] - np.unique(phi_grid)[0]
     sample_for_integration = Rzphi_density_data['sample_for_integration']
 
-    from scipy.stats import qmc
     X_regular_grid, Y_regular_grid = bin_dict['X_regular_grid'], bin_dict['Y_regular_grid']
     dX = jnp.unique(X_regular_grid)[1] - jnp.unique(X_regular_grid)[0]
     dY = jnp.unique(Y_regular_grid)[1] - jnp.unique(Y_regular_grid)[0]
@@ -112,7 +112,7 @@ def get_dict_data(path):
     return dict_data
 
 if __name__ == "__main__":
-
+    path = './'
     dict_data = get_dict_data(path)
 
     def log_prior(theta,):
@@ -328,8 +328,8 @@ if __name__ == "__main__":
     samples = sampler.get_chain(discard=80, flat=True)
 
     param_names = ['logM_halo','logM_disk','logM_bulge', 'logRs_halo', 'logRs_disk', 'logHs_disk', 'logRs_bulge', 'alpha', 'beta', 'gamma', 'log_light_to_mass_ratio']
-    pd.DataFrame(samples, columns=param_names).to_csv(path+'/test_posterior_0225.csv', index=False)
+    pd.DataFrame(samples, columns=param_names).to_csv(path+'posteriors/test_posterior_0225.csv', index=False)
 
     samples_raw = sampler.get_chain(discard=0, flat=False)
-    with open(path+'/test_posterior_WholeChain_0225.pkl', 'wb') as f:
+    with open(path+'posteriors/test_posterior_WholeChain_0225.pkl', 'wb') as f:
         pickle.dump(samples_raw, f)
