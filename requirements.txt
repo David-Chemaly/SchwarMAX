@@ -6,10 +6,12 @@ corner
 emcee
 tqdm
 astropy
-jax
+# CUDA on A100 (requires CUDA 12 + compatible cuDNN on the host)
+-f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+jax[cuda12]
 jaxopt
 dynesty
 
 # GPU note:
-# For CUDA-enabled JAX, install JAX per the official JAX installation guide
-# for your CUDA/cuDNN version after `pip install -r requirements.txt`.
+# If your system uses CUDA 11.x, replace `jax[cuda12]` with `jax[cuda11_pip]`
+# and keep the -f link above. A100 supports both CUDA 11.x and 12.x.
