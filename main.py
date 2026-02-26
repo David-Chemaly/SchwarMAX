@@ -1,32 +1,33 @@
+
+path = '/content/drive/MyDrive/SchwarMAX-MCMC/'
+
+import sys
+sys.path.append(path)
+
+from model import *
 from likelihoods import *
 from utils import *
+from sample_from_density import sample_from_density_grid
+from CylindricalSpline import get_phi_m, evaluate_phi_axisymmetric
 
 import jax
+jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import jax.numpy.linalg as jnn
 import pandas as pd
 import numpy as np
+import scipy as sp
 import pickle
 
 import emcee
 import corner
+import matplotlib.pyplot as plt
 
 from constants import EPSILON
 
 def get_dict_data(path):
-    df_ic = pd.read_csv(path + 'mock_initial_conditions_xyz.csv')
-    df_ic = df_ic[np.sqrt(df_ic['x']**2 + df_ic['y']**2) < 15.0]
-    df_ic = df_ic[np.fabs(df_ic['z']) < 4.0]
 
-    n_particles =  20_000
-    print(n_particles)
-    np.random.seed(42)
-    index = np.random.choice(len(df_ic['x']), size=n_particles, replace=False)
-    df_ic = df_ic.iloc[index]
-    # w0 = jnp.array([df_ic['x'], df_ic['y'], df_ic['z'], df_ic['vx'], df_ic['vy'], df_ic['vz']]).T
-    w0 = jnp.array(df_ic[['x','y','z']].to_numpy())
-
-    with open(path + 'mock_SCM_disc_XY_withRot.pkl', 'rb') as f:
+    with open(path + 'mock_Nbody_disc_bulge_XY_withRot.pkl', 'rb') as f:
         bin_dict = pickle.load(f)
 
     # voronoi binning mapping and data
@@ -71,7 +72,7 @@ def get_dict_data(path):
 
 
     dict_data = {
-        'w0': w0,
+        # 'w0': w0,
         'v0': v0,
         's': s,
 
@@ -111,12 +112,12 @@ def get_dict_data(path):
     return dict_data
 
 if __name__ == "__main__":
-    path = '/home/hz420/python_script/SchwarMAX/'
+
     dict_data = get_dict_data(path)
 
     def log_prior(theta,):
-        if (6 < theta[0] < 10) and (-1 < theta[1] < 2) and (-1 < theta[2] < 1)\
-        and (0 <= theta[3] < jnp.pi) and (0 <= theta[4] < jnp.pi/2) and (0 <= theta[5] < jnp.pi):
+        if (6 < theta[0] < 10) and (8 < theta[1] < 12) and (-1 < theta[2] < 2) and (-1 < theta[3] < 1) and (-1 < theta[4] < 1)\
+        and (0 <= theta[5] < jnp.pi) and (0 <= theta[6] < jnp.pi/2) and (0 <= theta[7] < jnp.pi):
             return 0.0  # log(1) = 0 for uniform prior
         return -np.inf  # log(0) = -inf for out-of-bounds
 
@@ -125,17 +126,17 @@ if __name__ == "__main__":
         lp = log_prior(theta)
         if not np.isfinite(lp):
             return -np.inf
-        
+
         ll = logl_density(theta, dict_data, dict_data['total_bins'])
 
         return ll + lp
-    
-    ndim = 6
+
+    ndim = 8
     nwalkers = 16  # must be >= 2 * ndim
 
     # Initialize walkers around ground truth
     # p0 = np.array([ground_truth[k] for k in param_names])
-    p0 = np.array([9.2, 0.3, 0., jnp.pi/4, jnp.pi/4, jnp.pi/4])
+    p0 = np.array([9.2, 10, 0.3, 0., 0., jnp.pi/4, jnp.pi/4, jnp.pi/4])
     # initial_pos = p0 + 1e-1 * np.random.randn(nwalkers, ndim)
     np.random.seed(42)
     initial_pos = p0 + np.random.uniform(-0.3, 0.3, (nwalkers, ndim))
@@ -145,60 +146,154 @@ if __name__ == "__main__":
 
     samples = sampler.get_chain(discard=200, flat=True)
 
+
     params_bestfit = np.percentile(samples, axis=0, q=50)
     logl_val = logl_density(params_bestfit, dict_data, dict_data['total_bins'])
     print('Best-fit logL projection', logl_val)#
 
     dict_data['logl_density_max'] = logl_val
-    logrho0_best_fit, logRs_disk_best_fit, logHs_disk_best_fit, alpha_best_fit, beta_best_fit, gamma_best_fit = params_bestfit
 
-    # dict_data['logl_density_max'] = -0.24
-    # logrho0_best_fit, logRs_disk_best_fit, logHs_disk_best_fit, alpha_best_fit, beta_best_fit, gamma_best_fit = (9,0.45,-0.24,0.54,0.36,1.34)
-    # disc_mass_tot = 10**logHs_disk_best_fit * 4 * np.pi * 10**(2*logRs_disk_best_fit) * 10**logHs_disk_best_fit  # Total mass from best-fit parameters
+    logrho0_best_fit, logM_bulge_best_fit, \
+    logRd_disc_best_fit, logHs_disc_best_fit, logRs_bulge_best_fit, \
+    alpha_best_fit, beta_best_fit, gamma_best_fit = params_bestfit
+    # logMhalo_best_fit, logrho0_best_fit, logM_bulge_best_fit, logRh_disk_best_fit, logRs_disk_best_fit, logHs_disk_best_fit, logRs_bulge_best_fit,\
+    #       alpha_best_fit, beta_best_fit, gamma_best_fit, logLM_best_fit = (11.8, 8.8, 10.4, 1.2, 0.45, -0.24, -0.1, 30*np.pi/180, 20*np.pi/180, 0*np.pi/180, 0)
+
+    print('logrho0_best_fit',logrho0_best_fit)
+    print('logM_bulge_best_fit',logM_bulge_best_fit)
+    print('logRd_disc_best_fit',logRd_disc_best_fit)
+    print('logHs_disk_best_fit',logHs_disc_best_fit)
+    print('logRs_bulge_best_fit',logRs_bulge_best_fit)
+    print('alpha_best_fit',alpha_best_fit * 180 / np.pi)
+    print('beta_best_fit',beta_best_fit * 180 / np.pi)
+    print('gamma_best_fit',gamma_best_fit * 180 / np.pi)
+
+    params_halo_pot = {
+        'logM': 11.8,
+        'Rs':19,
+        'a':1.0,
+        'b':1.0,
+        'c':1.0,
+        'x_origin':0.0,
+        'y_origin':0.0,
+        'z_origin':0.0,
+        'dirx':0.0,
+        'diry':0.0,
+        'dirz':1.0
+    }
+
+    params_disk_rho = {
+        'rho0_disc': 10 ** logrho0_best_fit,
+        'Rd_disc': 10 ** logRd_disc_best_fit,
+        'hz_disc': 10 ** logHs_disc_best_fit,
+        'x_origin': 0.0,
+        'y_origin': 0.0,
+        'z_origin': 0.0,
+        'dirx': 0.0,
+        'diry': 0.0,
+        'dirz': 1.0,
+        'alpha': alpha_best_fit * 180 / jnp.pi,
+        'beta': beta_best_fit * 180 / jnp.pi,
+        'gamma': gamma_best_fit * 180 / jnp.pi,
+        'light_to_mass_ratio': 1,
+        'logM_bulge': logM_bulge_best_fit,
+        'Rs_bulge': 10 ** logRs_bulge_best_fit,
+    }
+
+    @jax.jit
+    def potential_func(x, y, z, dict_phi, params_halo):
+        """ Returns Phi(R, z) """
+        phi_halo = NFW_potential(x, y, z, params_halo)
+        phi_disk = evaluate_phi_axisymmetric(x, y, z, dict_phi)
+        return phi_halo + phi_disk
+
+    @jax.jit
+    def density_func(x, y, z, params):
+        """ Returns Stellar Density nu(R, z) """
+        # Double Exponential Disk
+        val = DoubleExponentialDisk_density(x, y, z, params) + Hernquist_density(x, y, z, params)
+        return val
+
+    bounds = jnp.array(
+        [
+            [-15.0, 15.0],  # x
+            [-15.0, 15.0],  # y
+            [-5.0, 5.0],    # z
+        ],
+        dtype=jnp.float32,
+    )
+
+    n_samples = 20_000
+    n_x,n_y,n_z = 48, 48, 32
+
+    key = jax.random.PRNGKey(0)
+    sample_ic_dict = sample_from_density_grid(
+        key,
+        density_func,
+        params_disk_rho,
+        bounds,
+        n_samples=n_samples,
+        n_x=n_x,
+        n_y=n_y,
+        n_z=n_z,
+    )
+    samples = np.asarray(sample_ic_dict["samples"])
+    dict_data['w0'] = samples
 
 
-    alpha = alpha_best_fit
-    beta = beta_best_fit
-    gamma = gamma_best_fit
-    ground_truth = [11.5,
-                    logrho0_best_fit,
-                    jnp.log10(19).item(),
-                    logRs_disk_best_fit,
-                    logHs_disk_best_fit,
-                    alpha,
-                    beta,
-                    gamma,
-                    0.
+    ground_truth = [
+        11.5,
+        logrho0_best_fit,
+        logM_bulge_best_fit,
+        jnp.log10(19).item(),
+        logRd_disc_best_fit,
+        logHs_disc_best_fit,
+        logRs_bulge_best_fit,
+        alpha_best_fit,
+        beta_best_fit,
+        gamma_best_fit,
+        0.3
     ]
     logL = logl_angular_input(ground_truth, dict_data, dict_data['total_bins'])
     print(logL)
 
+    import time
+    start = time.time()
+    logL = logl_angular_input(ground_truth, dict_data, dict_data['total_bins'])
+    logL.block_until_ready()  # Ensure computation finishes before timing
+    end = time.time()
+    print('time per logl evaluation', end - start)
 
-
-    prior_uniform_low =  [ground_truth[0] - 3,
-                        ground_truth[1] - 3,
-                        ground_truth[2]- 1,
-                        ground_truth[3]- 1,
-                        ground_truth[4]- 1,
-                        0,
-                        0,
-                        0,
-                        -2
-                        ]
-    prior_uniform_high = [ground_truth[0] + 3,
-                        ground_truth[1] + 3,
-                        ground_truth[2]+ 1,
-                        ground_truth[3]+ 1,
-                        ground_truth[4]+ 1,
-                        jnp.pi,
-                        jnp.pi/2,
-                        jnp.pi,
-                        2
-                        ]
+    prior_uniform_low =  [
+        ground_truth[0] - 3,
+        ground_truth[1] - 3,
+        ground_truth[2] - 3,
+        ground_truth[3]- 1,
+        ground_truth[4]- 1,
+        ground_truth[5]- 1,
+        ground_truth[6]- 1,
+        0,
+        0,
+        0,
+        -2
+    ]
+    prior_uniform_high = [
+        ground_truth[0] + 3,
+        ground_truth[1] + 3,
+        ground_truth[2] + 3,
+        ground_truth[3]+ 1,
+        ground_truth[4]+ 1,
+        ground_truth[5]+ 1,
+        ground_truth[6]+ 1,
+        jnp.pi,
+        jnp.pi/2,
+        jnp.pi,
+        2
+    ]
 
     def log_prior(params):
         lp = 0
-        for i in range (0, 9):
+        for i in range (0, ndim):
             if (params[i]<=prior_uniform_low[i]) & (params[i]>=prior_uniform_high[i]):
                 lp+= -jnp.inf
         return lp
@@ -212,25 +307,29 @@ if __name__ == "__main__":
         if not np.isfinite(ll):
             return -np.inf
         return lp + ll
-    
-    ndim = 9
-    nwalkers = 18  # must be >= 2 * ndim
+
+    ndim = 11
+    nwalkers = 22  # must be >= 2 * ndim
+
+    np.random.seed(42)
 
     # Initialize walkers around ground truth
     # p0 = np.array([ground_truth[k] for k in param_names])
     p0 = ground_truth
-    # initial_pos = p0 + 1e-1 * np.random.randn(nwalkers, ndim)
-    initial_pos = p0 + np.random.uniform(-0.3, 0.3, (nwalkers, ndim))
+    initial_pos = np.zeros((nwalkers, ndim))
+    initial_pos[:, :7] = np.vstack([p0[:7]]*nwalkers) * np.ones((nwalkers, 7)) + np.random.uniform(-0.5, 0.5, (nwalkers, 7))
+    initial_pos[:,7:10] = np.vstack([p0[7:10]]*nwalkers) * np.ones((nwalkers, 3)) + np.random.uniform(-0.1, 0.1, (nwalkers, 3))
+    initial_pos[:,7:10] = np.clip(initial_pos[:,7:10], a_min=0, a_max=np.vstack([[jnp.pi, jnp.pi/2, jnp.pi]]*nwalkers))
+    initial_pos[:,  10] = p0[10] + np.random.uniform(-0.3, 0.3, nwalkers)
 
     sampler = emcee.EnsembleSampler(nwalkers, ndim, log_prob)
-    sampler.run_mcmc(initial_pos, 300, progress=True)
+    sampler.run_mcmc(initial_pos, 250, progress=True)
 
-    samples = sampler.get_chain(discard=100, flat=True)
+    samples = sampler.get_chain(discard=80, flat=True)
 
-    param_names = ['logM_halo','logM_disk', 'logRs_halo', 'logRs_disk', 'logHs_disk', 'alpha', 'beta', 'gamma', 'log_light_to_mass_ratio']
-    import pandas as pd
-    pd.DataFrame(samples, columns=param_names).to_csv(path+'/test_posterior_0218.csv', index=False)
+    param_names = ['logM_halo','logM_disk','logM_bulge', 'logRs_halo', 'logRs_disk', 'logHs_disk', 'logRs_bulge', 'alpha', 'beta', 'gamma', 'log_light_to_mass_ratio']
+    pd.DataFrame(samples, columns=param_names).to_csv(path+'/test_posterior_0225.csv', index=False)
 
     samples_raw = sampler.get_chain(discard=0, flat=False)
-    with open(path+'/test_posterior_WholeChain_0218.pkl', 'wb') as f:
+    with open(path+'/test_posterior_WholeChain_0225.pkl', 'wb') as f:
         pickle.dump(samples_raw, f)
