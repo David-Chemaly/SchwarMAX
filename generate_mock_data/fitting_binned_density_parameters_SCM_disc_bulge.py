@@ -217,6 +217,9 @@ if __name__ == "__main__":
     corner.corner(samples_plot, labels=['R_d','h_z', 'log10 rho0', 'R_s', 'log10 M_bulge'], 
                 show_titles=True, title_fmt='.2f', title_kwargs={"fontsize": 15},
                 smooth=True, quantiles=[0.16, 0.5, 0.84], fig=fig)
+    ########################
+    fig.savefig('/data/hz420-2/SchwarMAX/SCM_disc_bulge2/model/disc_bulge_posterior.png')
+    ########################
 
     best_fit_param = np.percentile(samples_plot, 50, axis=0)
     print("Best-fit parameters:")

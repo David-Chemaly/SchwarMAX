@@ -430,8 +430,8 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
         _z
     )
 
-    N_step_per_orb = 50
-    N_dynamical_time = 40
+    N_step_per_orb = 100
+    N_dynamical_time = 20
     dt = T_orb / N_step_per_orb
     time_integrate = T_orb * N_dynamical_time
     N_steps = N_step_per_orb * N_dynamical_time
@@ -524,7 +524,7 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     weights = solve_lbfgs_softplus(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
                                     y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
                                     sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-                                    l2=1, maxiter=500)
+                                    l2=10, maxiter=1000)
     # weights = solve_two_stage(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
     #                                 y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
     #                                 sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
@@ -620,8 +620,8 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
         _z
     )
 
-    N_step_per_orb = 50
-    N_dynamical_time = 40
+    N_step_per_orb = 100
+    N_dynamical_time = 20
     dt = T_orb / N_step_per_orb
     time_integrate = T_orb * N_dynamical_time
     N_steps = N_step_per_orb * N_dynamical_time
@@ -714,7 +714,7 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     weights = solve_lbfgs_softplus(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
                                     y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
                                     sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-                                    l2=10, maxiter=500)
+                                    l2=10, maxiter=1000)
     # weights = solve_two_stage(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
     #                                 y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
     #                                 sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,

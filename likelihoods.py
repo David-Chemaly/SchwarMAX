@@ -224,12 +224,11 @@ def logl_angular_input(params, dict_data, num_Vbin):
             res_h3 = ((h3_model - h3_data) / (h3_data_err + 1e-3))**2
             res_h4 = ((h4_model - h4_data) / (h4_data_err + 1e-3))**2    
 
-            res_density = jnp.where(res_density<jnp.percentile(res_density, 98.0), res_density, 0)
-            res_h1 = jnp.where(res_h1<jnp.percentile(res_h1, 98.0), res_h1, 0)
-            res_h2 = jnp.where(res_h2<jnp.percentile(res_h2, 98.0), res_h2, 0)
-            res_h3 = jnp.where(res_h3<jnp.percentile(res_h3, 98.0), res_h3, 0)
-            res_h4 = jnp.where(res_h4<jnp.percentile(res_h4, 98.0), res_h4, 0)
-
+            res_h1 = jnp.where((res_h1<jnp.percentile(res_h1, 98.0)) & (h1_model < 9.9), res_h1, 0)
+            res_h2 = jnp.where((res_h2<jnp.percentile(res_h2, 98.0)) & (h2_model < 9.9), res_h2, 0)
+            res_h3 = jnp.where((res_h3<jnp.percentile(res_h3, 98.0)) & (h3_model < 9.9), res_h3, 0)
+            res_h4 = jnp.where((res_h4<jnp.percentile(res_h4, 98.0)) & (h4_model < 9.9), res_h4, 0)
+    
             val1 = jnp.nansum( -0.5 * res_density ) / len(density_2DXY)
             val4 = jnp.nansum( -0.5 * res_h1 ) / len(h1_model)
             val5 = jnp.nansum( -0.5 * res_h2 ) / len(h2_model)
@@ -248,6 +247,7 @@ def logl_angular_input(params, dict_data, num_Vbin):
 
     val = jax.lax.cond(logl_density < logl_density_max - 100, true_func, false_func)
     # val = false_func()
+    # val = (val // 5) * 5 # bin the log-likelihood to reduce stochasticity
     return val
     
 
