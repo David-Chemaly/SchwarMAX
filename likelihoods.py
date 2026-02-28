@@ -219,15 +219,19 @@ def logl_angular_input(params, dict_data, num_Vbin):
             h4_data, h4_data_err = y_h4, sig_A4
 
             res_density = ((density_2DXY - y_xy) / (sig_xy + EPSILON))**2
-            res_h1 = ((h1_model - h1_data) / (h1_data_err + 1e-3))**2
-            res_h2 = ((h2_model - h2_data) / (h2_data_err + 1e-3))**2
-            res_h3 = ((h3_model - h3_data) / (h3_data_err + 1e-3))**2
-            res_h4 = ((h4_model - h4_data) / (h4_data_err + 1e-3))**2    
+            res_h1 = ((h1_model - h1_data) / (h1_data_err + EPSILON))**2
+            res_h2 = ((h2_model - h2_data) / (h2_data_err + EPSILON))**2
+            res_h3 = ((h3_model - h3_data) / (h3_data_err + EPSILON))**2
+            res_h4 = ((h4_model - h4_data) / (h4_data_err + EPSILON))**2    
 
-            res_h1 = jnp.where((res_h1<jnp.percentile(res_h1, 98.0)) & (h1_model < 9.9), res_h1, 0)
-            res_h2 = jnp.where((res_h2<jnp.percentile(res_h2, 98.0)) & (h2_model < 9.9), res_h2, 0)
-            res_h3 = jnp.where((res_h3<jnp.percentile(res_h3, 98.0)) & (h3_model < 9.9), res_h3, 0)
-            res_h4 = jnp.where((res_h4<jnp.percentile(res_h4, 98.0)) & (h4_model < 9.9), res_h4, 0)
+            # res_h1 = jnp.where((res_h1<jnp.percentile(res_h1, 98.0)) & (h1_model < 9.9), res_h1, 0)
+            # res_h2 = jnp.where((res_h2<jnp.percentile(res_h2, 98.0)) & (h2_model < 9.9), res_h2, 0)
+            # res_h3 = jnp.where((res_h3<jnp.percentile(res_h3, 98.0)) & (h3_model < 9.9), res_h3, 0)
+            # res_h4 = jnp.where((res_h4<jnp.percentile(res_h4, 98.0)) & (h4_model < 9.9), res_h4, 0)
+            res_h1 = jnp.where((h1_model < 9.9), res_h1, 0)
+            res_h2 = jnp.where((h2_model < 9.9), res_h2, 0)
+            res_h3 = jnp.where((h3_model < 9.9), res_h3, 0)
+            res_h4 = jnp.where((h4_model < 9.9), res_h4, 0)
     
             val1 = jnp.nansum( -0.5 * res_density ) / len(density_2DXY)
             val4 = jnp.nansum( -0.5 * res_h1 ) / len(h1_model)
