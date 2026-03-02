@@ -263,7 +263,6 @@ def solve_two_stage(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
     x_hat = jnn.softplus(res2.params)
     return x_hat
 
-from jaxopt import BoxOSQP
 from functools import partial
 
 # @partial(jax.jit, static_argnames=('maxiter',))
@@ -381,6 +380,37 @@ def solve_fista(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
     (x_final, _, _), _ = jax.lax.scan(fista_step, (x0, x0, 1.0), None, length=maxiter)
 
     return x_final
+
+
+@partial(jax.jit, static_argnames=("maxiter", "method"))
+def solve_nonnegative_nonlinear_cg(
+    A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+    y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+    sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+    l2=1.0, maxiter=1000, method="polak-ribiere",
+):
+    """
+    Deterministic non-LBFGS optimizer for non-negative orbital weights.
+
+    We optimize the exact clipped objective (_nll_z) with a softplus
+    parametrization and nonlinear conjugate gradient.
+    """
+    z0 = jnp.ones(A_Rzphi.shape[1], A_Rzphi.dtype) * (jnp.sum(y_Rzphi) / A_Rzphi.shape[1])
+    solver = jaxopt.NonlinearCG(
+        fun=_nll_z,
+        value_and_grad=True,
+        maxiter=maxiter,
+        tol=1e-7,
+        method=method,
+    )
+    res = solver.run(
+        z0,
+        A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+        y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+        sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4, l2,
+    )
+    x_hat = jnn.softplus(res.params)
+    return jax.lax.stop_gradient(x_hat)
 
 # @jax.jit
 @partial(jax.jit, static_argnames=('num_Vbin'))
