@@ -1,5 +1,5 @@
-# import sys
-# sys.path.append('/content/drive/MyDrive/SchwarMAX')
+import sys
+sys.path.append('/content/drive/MyDrive/SchwarMAX')
 
 import pickle
 
@@ -263,125 +263,6 @@ def solve_two_stage(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
     x_hat = jnn.softplus(res2.params)
     return x_hat
 
-from functools import partial
-
-# @partial(jax.jit, static_argnames=('maxiter',))
-def solve_qp(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
-             y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
-             sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-             l2=1e-5, maxiter=500):
-    """
-    Quadratic programming for Schwarzschild modeling using BoxOSQP.
-    """
-    n_orbits = A_Rzphi.shape[1]
-
-    # Linearized kinematic matrices
-    A_h1_lin = (A_h1 * A_xy) / y_xy[:, None]
-    A_h2_lin = (A_h2 * A_xy) / y_xy[:, None]
-    A_h3_lin = (A_h3 * A_xy) / y_xy[:, None]
-    A_h4_lin = (A_h4 * A_xy) / y_xy[:, None]
-
-    # Stack all constraints
-    A = jnp.vstack([
-        A_Rzphi / sig_Rzphi[:, None],
-        A_xy / sig_xy[:, None],
-        A_h1_lin / sig_A1[:, None],
-        A_h2_lin / sig_A2[:, None],
-        A_h3_lin / sig_A3[:, None],
-        A_h4_lin / sig_A4[:, None],
-    ])
-
-    y = jnp.concatenate([
-        y_Rzphi / sig_Rzphi,
-        y_xy / sig_xy,
-        y_h1 / sig_A1,
-        y_h2 / sig_A2,
-        y_h3 / sig_A3,
-        y_h4 / sig_A4,
-    ])
-
-    # QP matrices: min 0.5 * x^T Q x + c^T x
-    Q = A.T @ A + l2 * jnp.eye(n_orbits)
-    c = -A.T @ y
-
-    # Constraint: l <= A_constraint @ x <= u
-    # For x >= 0, use A_constraint = I, l = 0, u = inf
-    A_constraint = jnp.eye(n_orbits)
-    l = jnp.zeros(n_orbits)
-    u = jnp.full(n_orbits, jnp.inf)
-
-    qp = BoxOSQP(maxiter=maxiter, tol=1e-3)
-    sol = qp.run(params_obj=(Q, c), params_eq=A_constraint, params_ineq=(l, u)).params
-
-    return sol.primal[0]
-
-from functools import partial
-
-# @partial(jax.jit, static_argnames=('maxiter',))
-def solve_fista(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
-                y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
-                sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-                l2=1e-5, maxiter=2000):
-    """
-    FISTA for non-negative least squares.
-
-    Solves: min 0.5 * ||A @ x - y||^2 + 0.5 * l2 * ||x||^2
-            s.t. x >= 0
-    """
-    n_orbits = A_Rzphi.shape[1]
-
-    # Linearized kinematic matrices
-    A_h1_lin = (A_h1 * A_xy) / y_xy[:, None]
-    A_h2_lin = (A_h2 * A_xy) / y_xy[:, None]
-    A_h3_lin = (A_h3 * A_xy) / y_xy[:, None]
-    A_h4_lin = (A_h4 * A_xy) / y_xy[:, None]
-
-    # Stack all constraints
-    A = jnp.vstack([
-        A_Rzphi / sig_Rzphi[:, None],
-        A_xy / sig_xy[:, None],
-        A_h1_lin / sig_A1[:, None],
-        A_h2_lin / sig_A2[:, None],
-        A_h3_lin / sig_A3[:, None],
-        A_h4_lin / sig_A4[:, None],
-    ])
-
-    y = jnp.concatenate([
-        y_Rzphi / sig_Rzphi,
-        y_xy / sig_xy,
-        y_h1 / sig_A1,
-        y_h2 / sig_A2,
-        y_h3 / sig_A3,
-        y_h4 / sig_A4,
-    ])
-
-    # Precompute normal equations
-    AtA = A.T @ A + l2 * jnp.eye(n_orbits)
-    Aty = A.T @ y
-
-    # Lipschitz constant
-    L = jnp.linalg.norm(AtA, ord=2)
-    step_size = 1.0 / L
-
-    def fista_step(carry, _):
-        x, x_old, t = carry
-
-        # Gradient step
-        grad = AtA @ x - Aty
-        x_new = jnp.clip(x - step_size * grad, 0, None)
-
-        # FISTA momentum
-        t_new = (1 + jnp.sqrt(1 + 4 * t**2)) / 2
-        x_accel = jnp.clip(x_new + ((t - 1) / t_new) * (x_new - x_old), 0, None)
-
-        return (x_accel, x_new, t_new), None
-
-    x0 = jnp.ones(n_orbits) / n_orbits
-    (x_final, _, _), _ = jax.lax.scan(fista_step, (x0, x0, 1.0), None, length=maxiter)
-
-    return x_final
-
-
 @partial(jax.jit, static_argnames=("maxiter", "method"))
 def solve_nonnegative_nonlinear_cg(
     A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
@@ -400,7 +281,7 @@ def solve_nonnegative_nonlinear_cg(
         fun=_nll_z,
         value_and_grad=True,
         maxiter=maxiter,
-        tol=1e-7,
+        tol=1e-6,
         method=method,
     )
     res = solver.run(
@@ -411,6 +292,8 @@ def solve_nonnegative_nonlinear_cg(
     )
     x_hat = jnn.softplus(res.params)
     return jax.lax.stop_gradient(x_hat)
+
+
 
 # @jax.jit
 @partial(jax.jit, static_argnames=('num_Vbin'))
@@ -555,6 +438,11 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
                                     y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
                                     sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
                                     l2=10, maxiter=1000)
+    # weights = solve_nonnegative_nonlinear_cg(
+    #     A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+    #     y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+    #     sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+    #     l2=1.0, maxiter=2000, method="polak-ribiere",)
     # weights = solve_two_stage(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
     #                                 y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
     #                                 sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
@@ -745,6 +633,256 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
                                     y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
                                     sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
                                     l2=10, maxiter=1000)
+    # weights = solve_two_stage(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+    #                                 y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+    #                                 sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+    #                                 l2=1, maxiter=500)
+    # weights = solve_qp(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+    #                                 y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+    #                                 sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+    #                                 l2=1e-3, maxiter=500)
+    # weights = solve_fista(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+    #                                 y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+    #                                 sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+    #                                 l2=1e-3, maxiter=500)
+
+    # weights = jax.lax.stop_gradient(weights)
+
+    weights_unity = jnp.ones(A_Rzphi.shape[1], A_Rzphi.dtype) * (jnp.sum(y_Rzphi) / A_Rzphi.shape[1])
+
+    #===================================== Calculate the net kinematics of the model =========================================
+
+
+    A_h1, A_h2, A_h3, A_h4 = (A_h1 * A_xy), (A_h2 * A_xy), (A_h3 * A_xy), (A_h4 * A_xy)
+    density_2DXY = A_xy @ weights
+    h1_model = (A_h1 @ weights) / y_xy # density_2DXY
+    h2_model = (A_h2 @ weights) / y_xy # density_2DXY
+    h3_model = (A_h3 @ weights) / y_xy # density_2DXY
+    h4_model = (A_h4 @ weights) / y_xy # density_2DXY
+
+    clip_val = 10.0
+    h1_model = jnp.where(h1_model > clip_val, clip_val, h1_model)
+    h2_model = jnp.where(h2_model > clip_val, clip_val, h2_model)
+    h3_model = jnp.where(h3_model > clip_val, clip_val, h3_model)
+    h4_model = jnp.where(h4_model > clip_val, clip_val, h4_model)
+    h1_model = jnp.where(h1_model < -clip_val, -clip_val, h1_model)
+    h2_model = jnp.where(h2_model < -clip_val, -clip_val, h2_model)
+    h3_model = jnp.where(h3_model < -clip_val, -clip_val, h3_model)
+    h4_model = jnp.where(h4_model < -clip_val, -clip_val, h4_model)
+
+    V_model, sigma_model = h_to_V_sigma(h1_model, h2_model, v0, s)
+
+    density_set = (density_2DXY, y_xy, sig_xy)
+    h1_set = (h1_model, y_h1, sig_A1)
+    h2_set = (h2_model, y_h2, sig_A2)
+    h3_set = (h3_model, y_h3, sig_A3)
+    h4_set = (h4_model, y_h4, sig_A4)
+
+    density_2DXY_unity = A_xy @ weights_unity
+    h1_model_unity = (A_h1 @ weights_unity) / y_xy # density_2DXY
+    h2_model_unity = (A_h2 @ weights_unity) / y_xy # density_2DXY
+    h3_model_unity = (A_h3 @ weights_unity) / y_xy # density_2DXY
+    h4_model_unity = (A_h4 @ weights_unity) / y_xy # density_2DXY
+
+    clip_val = 10.0
+    h1_model_unity = jnp.where(h1_model_unity > clip_val, clip_val, h1_model_unity)
+    h2_model_unity = jnp.where(h2_model_unity > clip_val, clip_val, h2_model_unity)
+    h3_model_unity = jnp.where(h3_model_unity > clip_val, clip_val, h3_model_unity)
+    h4_model_unity = jnp.where(h4_model_unity > clip_val, clip_val, h4_model_unity)
+    h1_model_unity = jnp.where(h1_model_unity < -clip_val, -clip_val, h1_model_unity)
+    h2_model_unity = jnp.where(h2_model_unity < -clip_val, -clip_val, h2_model_unity)
+    h3_model_unity = jnp.where(h3_model_unity < -clip_val, -clip_val, h3_model_unity)
+    h4_model_unity = jnp.where(h4_model_unity < -clip_val, -clip_val, h4_model_unity)
+
+    V_model_unity, sigma_model_unity = h_to_V_sigma(h1_model_unity, h2_model_unity, v0, s)
+
+    density_unity_set = (density_2DXY_unity, y_xy, sig_xy)
+    h1_unity_set = (h1_model_unity, y_h1, sig_A1)
+    h2_unity_set = (h2_model_unity, y_h2, sig_A2)
+    h3_unity_set = (h3_model_unity, y_h3, sig_A3)
+    h4_unity_set = (h4_model_unity, y_h4, sig_A4)
+
+    return density_set, V_model, sigma_model, h1_set, h2_set, h3_set, h4_set,\
+        density_unity_set, V_model_unity, sigma_model_unity, h1_unity_set, h2_unity_set, h3_unity_set, h4_unity_set,\
+              weights
+
+@partial(jax.jit, static_argnames=('num_Vbin'))
+def get_the_orbital_library(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
+
+    w0 = dict_data['w0']
+    n_particles = w0.shape[0]
+    v0 = dict_data['v0']
+    s = dict_data['s']
+    num_per_bin = dict_data['num_per_bin']
+    bin_mapping = dict_data['bin_mapping']
+    # num_Vbin = dict_data['total_bins']
+    alpha, beta, gamma = params_disk_rho['alpha'], params_disk_rho['beta'], params_disk_rho['gamma']
+    rotation_matrix = makeRotationMatrix(alpha, beta, gamma)
+
+    #=========================================== GET DISC POTENTIAL =====================================================
+
+    NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax = 50, 30, 1e-2, 30.0, 1e-2, 15.0, 8.
+    Nphi = 200
+    N_int = 10_000
+    dict_phi = get_phi_m(density_func, params_disk_rho, NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax, Nphi, N_int)
+
+    #=========================================== GET INITIAL VELOCITY ===================================================
+
+    get_jeans_moments_vmap = jax.vmap(get_jeans_moments, in_axes=(0,0,0,None,None,None,None))
+    # jeans_moments = get_jeans_moments(x_p, y_p, z_p, dict_phi, params_disk_rho,params_halo_pot, anisotropy_b=1.0)
+    def get_w0_new(w0, key1, key2, key3, n_particles):
+        jeans_moments = get_jeans_moments_vmap(w0[:,0], w0[:,1], w0[:,2], dict_phi, params_disk_rho, params_halo_pot, 1.)
+        v_rot, sig_R, sig_z, sig_phi = jeans_moments
+        g1, g2, g3 = jax.random.normal(key1, (n_particles,)), jax.random.normal(key2, (n_particles,)), jax.random.normal(key3, (n_particles,))
+        vR = g1 * sig_R # 2 sigma dispersion
+        vz = g2 * sig_z
+        vphi = v_rot + g3 * sig_phi
+        x, y, vx, vy = getCartesianFromCylindrical_clockwise(jnp.sqrt(w0[:,0]**2 + w0[:,1]**2), jnp.arctan2(w0[:,1], w0[:,0]), vR, vphi)
+        return jnp.array([x, y, w0[:,2], vx, vy, vz]).T
+    key1, key2, key3 = jax.random.PRNGKey(42), jax.random.PRNGKey(109), jax.random.PRNGKey(2026)
+    w0_new = get_w0_new(w0, key1, key2, key3, n_particles)
+
+    #======================================== Calculate orbital timescale =====================================================
+    _R = jnp.sqrt(w0_new[:,0]**2 + w0_new[:,1]**2)
+    _z = w0_new[:,2]
+
+    T_orb = jax.vmap(estimate_orbital_timescale, in_axes=(0, None, None, 0))(
+        _R,
+        potential_func,
+        (dict_phi, params_halo_pot),
+        _z
+    )
+
+    N_step_per_orb = 100
+    N_dynamical_time = 20
+    dt = T_orb / N_step_per_orb
+    time_integrate = T_orb * N_dynamical_time
+    N_steps = N_step_per_orb * N_dynamical_time
+    #=========================================== Integrate orbits =======================================================
+    @jax.jit
+    def acc_fn(x, y, z):
+        a_halo = NFW_acceleration(x, y, z,  params_halo_pot)
+        a_disk = get_acc(x, y, z, dict_phi)
+        return a_halo + a_disk
+
+    _integrate_vmap = jax.vmap(integrate_leapfrog_rot, 
+                            in_axes=(0, None, None, 0, None, None, None, None, None, None, None, None, None, None, None, None, None))
+
+    Rzphi_lim_grid = jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]])
+    xy_lim_grid = jnp.array([[-12.,12.],[-4.,4.]])
+    Rzphi_n_grid = jnp.array([10,6,6])
+    xy_n_grid = jnp.array([60,40])
+    Rzphi_n_tot = 360
+
+    time = time_integrate #Gyr
+    n_steps = N_steps
+    dt = dt
+    unroll = False
+    initial_time = 0.0
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4 = _integrate_vmap(
+                        w0_new, acc_fn, n_steps, dt, initial_time, unroll,
+                        num_Vbin, bin_mapping, num_per_bin,
+                        Rzphi_lim_grid, xy_lim_grid,
+                        Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
+                        v0, s, rotation_matrix)
+    A_Rzphi = Rzphi_bin_counts.T / n_steps
+    A_xy = surface_density.T / n_steps
+    A_h1 = h1.T
+    A_h2 = h2.T
+    A_h3 = h3.T
+    A_h4 = h4.T
+
+    #=========================================== Orbital weights optimisation ============================================
+
+    @jax.jit
+    def density_func_Rz(R, z, phi, params):
+        x = R * jnp.cos(phi)
+        y = R * jnp.sin(phi)
+        return density_func(x, y, z, params)
+
+    @partial(jax.jit, static_argnames=['rho_fct'])
+    def get_mass(R_grid, z_grid, phi_grid, rho_fct, dict_params, dR, dz, dphi, sample):
+        R_samples = R_grid + (sample[:,0] - 0.5) * dR
+        z_samples = z_grid + (sample[:,1] - 0.5) * dz
+        phi_samples = phi_grid + (sample[:,2] - 0.5) * dphi
+        density_samples = rho_fct(R_samples, z_samples, phi_samples, dict_params)
+        mass_tot = jnp.sum(density_samples * R_samples) / sample.shape[0]
+        return mass_tot
+
+    R_grid, dR = dict_data['R_grid'], dict_data['dR']
+    z_grid, dz = dict_data['z_grid'], dict_data['dz']
+    phi_grid, dphi = dict_data['phi_grid'], dict_data['dphi']
+    y_Rzphi = jax.vmap(get_mass, in_axes=[0, 0, 0, None, None, None, None, None, None])(
+                R_grid, z_grid, phi_grid, density_func_Rz, params_disk_rho, dR, dz, dphi, dict_data['sample_for_integration']
+    )
+    # y_Rzphi = dict_data['Rzphi_density_data'].astype(jnp.float32)
+
+    y_xy = dict_data['XY_density_data'].astype(jnp.float32)
+    y_h1 = dict_data['h1_data'].astype(jnp.float32)
+    y_h2 = dict_data['h2_data'].astype(jnp.float32)
+    y_h3 = dict_data['h3_data'].astype(jnp.float32)
+    y_h4 = dict_data['h4_data'].astype(jnp.float32)
+
+    y_xy = y_xy / params_disk_rho['light_to_mass_ratio'] # convert from light to mass
+
+    sig_Rzphi = 0.02 * y_Rzphi + 1e-10
+    sig_xy = 0.01 * y_xy + 1e-10
+    # frac_err_min = 0.1
+    h_err_min = 0.03
+    sig_A1 = jnp.where(h_err_min > dict_data['h1_data_err'], h_err_min, dict_data['h1_data_err']) + EPSILON
+    sig_A2 = jnp.where(h_err_min > dict_data['h2_data_err'], h_err_min, dict_data['h2_data_err']) + EPSILON
+    sig_A3 = jnp.where(h_err_min > dict_data['h3_data_err'], h_err_min, dict_data['h3_data_err']) + EPSILON
+    sig_A4 = jnp.where(h_err_min > dict_data['h4_data_err'], h_err_min, dict_data['h4_data_err']) + EPSILON
+
+    mean_mass_per_orb = jnp.sum(y_Rzphi) / A_Rzphi.shape[1]
+
+    y_xy = y_xy / mean_mass_per_orb
+    # A_xy = A_xy / mean_mass_per_orb
+    sig_xy = sig_xy / mean_mass_per_orb
+    y_Rzphi = y_Rzphi / mean_mass_per_orb
+    # A_Rzphi = A_Rzphi / mean_mass_per_orb
+    sig_Rzphi = sig_Rzphi / mean_mass_per_orb
+
+    return (A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4, \
+           y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4, \
+           sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4)
+
+@partial(
+    jax.jit,
+    static_argnames=("solver", "solver_maxiter", "solver_power_iters", "solver_cg_maxiter"),
+)
+def get_weights(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+           y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+           sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4, dict_data,
+           solver="lbfgs", solver_maxiter=1000, solver_power_iters=12, solver_cg_maxiter=8):
+    
+    v0 = dict_data['v0']
+    s = dict_data['s']
+
+    if solver == "nnls":
+        weights = solve_nonnegative_nonlinear_cg(
+            A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+            y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+            sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+            l2=1.0, maxiter=solver_maxiter, method="polak-ribiere",
+        )
+    elif solver == "qp":
+        weights = solve_nonnegative_nonlinear_cg(
+            A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+            y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+            sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+            l2=1.0, maxiter=solver_maxiter, method="fletcher-reeves",
+        )
+    elif solver == "lbfgs":
+        weights = solve_lbfgs_softplus(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+                                       y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+                                       sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+                                       l2=1, maxiter=1000)
+    else:
+        weights = solve_lbfgs_softplus(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+                                       y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+                                       sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+                                       l2=10, maxiter=1000)
     # weights = solve_two_stage(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
     #                                 y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
     #                                 sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
