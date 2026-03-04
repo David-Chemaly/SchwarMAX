@@ -88,6 +88,20 @@ def FerrersBar_density(x, y, z, params):
     rho = jnp.where(inside, params['rho0'] * (1.0 - m2) ** params['n'], 0.0)
     return rho
 
+@jax.jit
+def Ferrers_density(x, y, z, params):
+
+    '''
+    params include: 'logM_bar', 'Rs_bar', 'q_bar', 'p_bar'
+    '''
+    p, q, Rs = params['p_bar'], params['q_bar'], params['Rs_bar']
+    M = 10.0 ** params['logM_bar']
+    r = jnp.sqrt(x**2 + (y / p)**2 + (z / q)**2)
+    rho = 105 * M / (32 * jnp.pi * p * q * Rs**3) * (1 - (r / Rs)**2)**2
+    rho = jnp.clip(rho, a_min=0.0)  # Ensure non-negative density
+    return rho
+
+
 # ---------- Double Exponential Disk x2 + Ferrers Bar  ----------
 @jax.jit
 def DoubleExponentialDiskx2FerrersBar_density(x, y, z, params):
