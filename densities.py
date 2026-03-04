@@ -98,7 +98,7 @@ def Ferrers_density(x, y, z, params):
     M = 10.0 ** params['logM_bar']
     r = jnp.sqrt(x**2 + (y / p)**2 + (z / q)**2)
     rho = 105 * M / (32 * jnp.pi * p * q * Rs**3) * (1 - (r / Rs)**2)**2
-    rho = jnp.clip(rho, a_min=0.0)  # Ensure non-negative density
+    rho = jnp.where(r < Rs, rho, 0.0)
     return rho
 
 
@@ -176,5 +176,21 @@ def Hernquist_density(x, y, z, params):
     r = jnp.sqrt(rx**2 + ry**2 + rz**2)
 
     val = 10 ** params['logM_bulge'] / (2*jnp.pi) * params['Rs_bulge'] / (r * (params['Rs_bulge'] + r)**3) * jnp.exp(-(r / 4)**4)
+
+    return val
+
+
+@jax.jit
+def Dehnen_density(x, y, z, params):
+
+    '''
+    Dehnen profile: rho = (M / (4π p q Rs^3)) * (r/Rs)^(-n) * (1 + r/Rs)^(n-4), where n = 2
+    '''
+
+    p, q, Rs = params['p_bar'], params['q_bar'], params['Rs_bar']
+    M = 10.0 ** params['logM_bar']
+    r = jnp.sqrt(x**2 + (y / p)**2 + (z / q)**2)
+
+    val = M / (4 * jnp.pi * p * q * Rs**3) * (r / Rs)**(-2) * (1 + r / Rs)**(-2) * jnp.exp(-(z / 3)**4)
 
     return val

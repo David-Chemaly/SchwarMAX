@@ -105,7 +105,7 @@ def rotate(posvel, angle):
 # mass_data = data['mass']
 
 mass_unit = 1/((G*u.Msun).to(u.kpc*(u.km/u.s)**2))
-w0_data, mass_data = agama.readSnapshot(f'/data/hz420-2/SchwarMAX/Bar_model_TG21/model/snap_t0_3')
+w0_data, mass_data = agama.readSnapshot(f'/data/hz420-2/SchwarMAX/Bar_model_TG21/model/t_t0_2.5')#snap_t0_3
 mass_data = mass_data * mass_unit.value
 
 mask = (mass_data!=np.unique(mass_data)[-1])
@@ -123,12 +123,12 @@ w0_data[:,0] = -w0_data[:,0]
 w0_data[:,3] = -w0_data[:,3]
 
 R_mid, bar_angles0, bar_strength0 = bar_angle_bar_strength(w0_data[:,0], w0_data[:,1], R_anulus = np.arange(1,5,0.25))
-bar_angle0 = np.mean(bar_angles0[R_mid<3])
+bar_angle0 = np.mean(bar_angles0[R_mid<4])
 rot_angle = -bar_angle0
 w0_data = rotate(w0_data, rot_angle)  # rotate to make it anticlockwise
 
 
-alpha, beta, gamma = 0, 20, 0
+alpha, beta, gamma = 30, 20, 130
 rot_mat = makeRotationMatrix(alpha, beta, gamma)
 x_data, v_data = w0_data[:,:3], w0_data[:,3:]
 x_data = (rot_mat @ x_data.T).T
@@ -218,7 +218,7 @@ XY_coords = XY_coords[mask]
 signal = signal[mask]
 noise = noise[mask]
 
-target_sn = 50
+target_sn = 40
 def capacity_spec(index):
     """Calculates (S/N)^2 for a bin from its pixel indices."""
     # Standard S/N formula for uncorrelated noise
