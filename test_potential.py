@@ -66,8 +66,8 @@ if __name__ == "__main__":
     }
 
     params_disk_rho = params_dict
-    NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax = 50, 50, 1e-3, 30.0, 1e-3, 15.0, 8.
-    Nphi = 500
+    NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax = 50, 30, 1e-3, 30.0, 1e-3, 15.0, 8.
+    Nphi = 300
     N_int = 10_000
     time_start = time.time()
     dict_phi = get_phi_m(density_func, params_disk_rho, NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax, Nphi, N_int)
@@ -78,12 +78,12 @@ if __name__ == "__main__":
     x_c, y_c = np.linspace(-10, 10, 100), np.linspace(-10, 10, 100)
     X_c, Y_c = np.meshgrid(x_c, y_c)
     X_c, Y_c = X_c.flatten(), Y_c.flatten()
-    Z_c = np.ones_like(X_c) * 1e-5
+    Z_c = np.ones_like(X_c) * 1e-4
 
     pts = np.array([X_c, Y_c, Z_c]).T
     get_acc_vec = jax.jit(jax.vmap(get_acc, in_axes=(0,0,0,None)))
     # warm-up JIT compile before timing
-    _ = get_acc_vec(pts[:,0], pts[:,1], pts[:,2], dict_phi)
+    _ = get_acc_vec(pts[:10,0]*0.99, pts[:10,1]*0.99, pts[:10,2]*0.99, dict_phi)
     _.block_until_ready()
     time_start = time.time()
     acc_pts_us = get_acc_vec(pts[:,0], pts[:,1], pts[:,2], dict_phi)
