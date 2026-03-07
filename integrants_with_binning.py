@@ -488,7 +488,7 @@ def integrate_leapfrog_barred(w0, acc_fn, n_steps, dt = 0.010, t0 = 0.0, Omega =
     v0_cell = v0[Vbin_indices]
     s_cell = s[Vbin_indices]
 
-    vy = wN[:,4]
+    vy = wN[:,4] * KPCGYR_TO_KMS
     w = (vy - v0_cell) / s_cell # (v_los - v0) / s, where in edge-on case v_los = vy = wN[:,4]
     counts = jax.ops.segment_sum(jnp.ones_like(vy), Vbin_indices, num_segments=num_Vbin)
     sum_w1 = jax.ops.segment_sum(w, Vbin_indices, num_segments=num_Vbin)

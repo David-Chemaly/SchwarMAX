@@ -40,7 +40,7 @@ from CylindricalSpline import get_phi_m, get_acc, evaluate_phi_axisymmetric
 path = '/Users/hanyuan/Dropbox/python_script/SchwarMAX/'
 def get_dict_data(path):
 
-    with open(path + 'mock_Nbody_disc_bulge_XY_withRot.pkl', 'rb') as f:
+    with open(path + 'mock_Nbody_bar_XY_withRot.pkl', 'rb') as f:
         bin_dict = pickle.load(f)
 
     # voronoi binning mapping and data
@@ -130,6 +130,7 @@ def get_dict_data(path):
 
     return dict_data
 
+
 # the following commands make plots look better
 def plot_prettier(dpi=200, fontsize=11, usetex=False):
     '''
@@ -168,13 +169,14 @@ if __name__ == "__main__":
     solver_cg_maxiter = int(os.environ.get("WEIGHT_SOLVER_CG_MAXITER", "8"))
 
     path_data = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data/'
-    with open(path_data + 'orbital_library_example.pkl', 'rb') as f:
+    with open(path_data + 'orbital_library_bar.pkl', 'rb') as f:
         orb_lib = pickle.load(f)
     (A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4, \
            y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4, \
            sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4) = orb_lib
-
-    print('Model has done')
+    
+    print(A_h3, A_h4)
+    
     print('Weight solver:', solver)
 
     time_start = time.time()
@@ -230,16 +232,14 @@ if __name__ == "__main__":
     fig, ax = plt.subplots(1,1, figsize=(8,6))
     ax.hist(jnp.log(weights), range = [-10, 5], bins=30, alpha=0.7, color='blue', edgecolor='black')
 
-
+    bin_mapping = dict_data['bin_mapping']
+    index_remap = bin_mapping[:-1]
 
     density_2DXY, y_xy, sig_xy = density_set
     h1_model, y_h1, sig_A1 = h1_set
     h2_model, y_h2, sig_A2 = h2_set
     h3_model, y_h3, sig_A3 = h3_set
     h4_model, y_h4, sig_A4 = h4_set
-
-    bin_mapping = dict_data['bin_mapping']
-    index_remap = bin_mapping[:-1]
 
     density_2DXY_weighted = density_2DXY[index_remap]
     V_model_weighted = V_model[index_remap]
@@ -248,6 +248,20 @@ if __name__ == "__main__":
     h2_model_weighted = h2_model[index_remap]
     h3_model_weighted = h3_model[index_remap]
     h4_model_weighted = h4_model[index_remap]
+
+    density_2DXY_unity, _, _ = density_unity_set
+    h1_model_unity, _, _ = h1_unity_set
+    h2_model_unity, _, _ = h2_unity_set
+    h3_model_unity, _, _ = h3_unity_set
+    h4_model_unity, _, _ = h4_unity_set
+
+    density_2DXY_unity = density_2DXY_unity[index_remap]
+    V_model_unity = V_model_unity[index_remap]
+    sigma_model_unity = sigma_model_unity[index_remap]
+    h1_model_unity = h1_model_unity[index_remap]
+    h2_model_unity = h2_model_unity[index_remap]
+    h3_model_unity = h3_model_unity[index_remap]
+    h4_model_unity = h4_model_unity[index_remap]
 
     surface_density = dict_data['XY_density_data']
     V_data = dict_data['V_data']
@@ -269,20 +283,21 @@ if __name__ == "__main__":
 
 
     model_batch = (density_2DXY_weighted, V_model_weighted, sigma_model_weighted, h3_model_weighted, h4_model_weighted)
+    model_unity_batch = (density_2DXY_unity, V_model_unity, sigma_model_unity, h3_model_unity, h4_model_unity)
     data_batch = (density_2DXY_data, V_model_data, sigma_model_data, h3_model_data, h4_model_data)
 
     fig_names = [r'$\Sigma_{\rm lum}$ [L$_\odot$/pc$^2$]', r'$V_{\rm los}$ [km/s]', r'$\sigma_{v}$ [km/s]', r'$h_3$', r'$h_4$']
     fig_names_save = ['Surface_density', 'V_los', 'Sigma_V', 'h3', 'h4']
-    vmin_ls = [1e-6, -200, 20, -0.5, -0.2]
-    vmax_ls = [1e-3, 200, 120, 0.5, 0.8]
+    vmin_ls = [1e-6, -200, 20, -0.2, -0.2]
+    vmax_ls = [1e-3, 200, 120, 0.2, 0.2]
     vminmax_ls = [0.5, 20, 20, 0.5, 0.5]
 
-    fig1, ax1 = plt.subplots(len(model_batch),3, figsize = (40,2 * len(model_batch)), gridspec_kw={'hspace':0.5, 'wspace':0.3})
+    fig1, ax1 = plt.subplots(len(model_batch),4, figsize = (60,5 * len(model_batch)), gridspec_kw={'hspace':0.5, 'wspace':0.5})
 
     for i in range(len(model_batch)):
 
         cb = ax1[i][0].scatter(X_regular_grid, Y_regular_grid, c=model_batch[i],
-                        s = 22, cmap='viridis', marker = 's', norm = 'log' if i == 0 else None,
+                        s = 15, cmap='viridis', marker = 's', norm = 'log' if i == 0 else None,
                         vmin = vmin_ls[i], vmax = vmax_ls[i], rasterized = True)
         ax1[i][0].set_title(f'Model', fontsize=15)
         ax1[i][0].set_xlabel('X [kpc]', fontsize=12)
@@ -293,10 +308,10 @@ if __name__ == "__main__":
         cbar.set_label(fig_names[i], fontsize=18)
         cbar.ax.tick_params(labelsize=14)
 
-        cb = ax1[i][1].scatter(X_regular_grid, Y_regular_grid, c=data_batch[i],
-                        s = 22, cmap='viridis', marker = 's', norm = 'log' if i == 0 else None,
+        cb = ax1[i][1].scatter(X_regular_grid, Y_regular_grid, c=model_unity_batch[i],
+                        s = 15, cmap='viridis', marker = 's', norm = 'log' if i == 0 else None,
                         vmin = vmin_ls[i], vmax = vmax_ls[i], rasterized = True)
-        ax1[i][1].set_title(f'Data', fontsize=15)
+        ax1[i][1].set_title(f'Model', fontsize=15)
         ax1[i][1].set_xlabel('X [kpc]', fontsize=12)
         ax1[i][1].set_ylabel('Y [kpc]', fontsize=12)
         ax1[i][1].set_xlim(-12, 12)
@@ -305,15 +320,27 @@ if __name__ == "__main__":
         cbar.set_label(fig_names[i], fontsize=18)
         cbar.ax.tick_params(labelsize=14)
 
-        res = (data_batch[i] - model_batch[i]) / data_batch[i] if i == 0 else (data_batch[i] - model_batch[i])
-        cb = ax1[i][2].scatter(X_regular_grid, Y_regular_grid, c=res,
-                        s = 22, cmap='coolwarm', marker = 's', vmin = -vminmax_ls[i], vmax = vminmax_ls[i], rasterized = True)
-        ax1[i][2].set_title('Residuals (Data - Model) / Data' if i == 0 else 'Residuals (Data - Model)', fontsize=15)
+        cb = ax1[i][2].scatter(X_regular_grid, Y_regular_grid, c=data_batch[i],
+                        s = 15, cmap='viridis', marker = 's', norm = 'log' if i == 0 else None,
+                        vmin = vmin_ls[i], vmax = vmax_ls[i], rasterized = True)
+        ax1[i][2].set_title(f'Data', fontsize=15)
         ax1[i][2].set_xlabel('X [kpc]', fontsize=12)
         ax1[i][2].set_ylabel('Y [kpc]', fontsize=12)
         ax1[i][2].set_xlim(-12, 12)
         ax1[i][2].set_ylim(-4, 4)
         cbar = fig1.colorbar(cb, ax=ax1[i][2])
+        cbar.set_label(fig_names[i], fontsize=18)
+        cbar.ax.tick_params(labelsize=14)
+
+        res = (data_batch[i] - model_batch[i]) / data_batch[i] if i == 0 else (data_batch[i] - model_batch[i])
+        cb = ax1[i][3].scatter(X_regular_grid, Y_regular_grid, c=res,
+                        s = 15, cmap='coolwarm', marker = 's', vmin = -vminmax_ls[i], vmax = vminmax_ls[i], rasterized = True)
+        ax1[i][3].set_title('Residuals (Data - Model) / Data' if i == 0 else 'Residuals (Data - Model)', fontsize=15)
+        ax1[i][3].set_xlabel('X [kpc]', fontsize=12)
+        ax1[i][3].set_ylabel('Y [kpc]', fontsize=12)
+        ax1[i][3].set_xlim(-12, 12)
+        ax1[i][3].set_ylim(-4, 4)
+        cbar = fig1.colorbar(cb, ax=ax1[i][3])
         cbar.set_label('Residuals', fontsize=18)
         cbar.ax.tick_params(labelsize=14)
 

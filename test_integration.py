@@ -1,6 +1,7 @@
 import agama
 agama.setUnits(mass=1, length=1, velocity=1)
 
+from constants import *
 from integrants_with_binning import integrate_leapfrog_barred
 from sample_from_density import sample_from_density_grid
 from densities import *
@@ -17,6 +18,99 @@ import pandas as pd
 import pickle
 
 import time
+
+path = '/Users/hanyuan/Dropbox/python_script/SchwarMAX/'
+def get_dict_data(path):
+
+    with open(path + 'mock_Nbody_bar_XY_withRot.pkl', 'rb') as f:
+        bin_dict = pickle.load(f)
+
+    # voronoi binning mapping and data
+    num_per_bin = jnp.array(bin_dict['num_per_bin'])
+    total_bins = jnp.array(bin_dict['total_bins'])
+    bin_mapping = jnp.array(bin_dict['bin_mapping'])
+    surface_density = jnp.array(bin_dict['surface_density'])
+    V_data = jnp.array(bin_dict['V_mean'])
+    sigma_data = jnp.array(bin_dict['V_sigma'])
+    h1_data = jnp.array(bin_dict['h1'])
+    h2_data = jnp.array(bin_dict['h2'])
+    h3_data = jnp.array(bin_dict['h3'])
+    h4_data = jnp.array(bin_dict['h4'])
+    v0 = jnp.array(bin_dict['v0'])
+    s = jnp.array(bin_dict['s'])
+    alpha, beta, gamma = bin_dict['orientation']
+
+    # V_data_err = jnp.where(0.1 * jnp.fabs(V_data) < 10, 10, 0.1 * V_data)
+    # sigma_data_err = jnp.where(0.1 * jnp.fabs(sigma_data) < 5, 5, 0.1 * sigma_data)
+    # h1_data_err = jnp.where(0.1 * jnp.fabs(h1_data) < 0.03, 0.03, 0.1 * jnp.fabs(h1_data))
+    # h2_data_err = jnp.where(0.1 * jnp.fabs(h2_data) < 0.03, 0.03, 0.1 * jnp.fabs(h2_data))
+    # h3_data_err = jnp.where(0.1 * jnp.fabs(h3_data) < 0.03, 0.03, 0.1 * jnp.fabs(h3_data))
+    # h4_data_err = jnp.where(0.1 * jnp.fabs(h4_data) < 0.03, 0.03, 0.1 * jnp.fabs(h4_data))
+    V_data_err = jnp.array(bin_dict['V_mean_err'])
+    sigma_data_err = jnp.array(bin_dict['V_sigma_err'])
+    h1_data_err = jnp.array(bin_dict['h1_err'])
+    h2_data_err = jnp.array(bin_dict['h2_err'])
+    h3_data_err = jnp.array(bin_dict['h3_err'])
+    h4_data_err = jnp.array(bin_dict['h4_err'])
+
+    # df_Rzphi_data = pd.read_csv(path + 'mock_axisymmetric_disc_Rzphi.csv')
+    # Rzphi_density_data = jnp.array(df_Rzphi_data['mass'].to_numpy()).astype(jnp.float32)
+    with open(path + 'mock_axisymmetric_disc_Rzphi.pkl', 'rb') as f:
+        Rzphi_density_data = pickle.load(f)
+
+    R_grid, z_grid, phi_grid = Rzphi_density_data['R_grid'], Rzphi_density_data['z_grid'], Rzphi_density_data['phi_grid']
+    dR = np.unique(R_grid)[1] - np.unique(R_grid)[0]
+    dz = np.unique(z_grid)[1] - np.unique(z_grid)[0]
+    dphi = np.unique(phi_grid)[1] - np.unique(phi_grid)[0]
+    sample_for_integration = Rzphi_density_data['sample_for_integration']
+
+    from scipy.stats import qmc
+    X_regular_grid, Y_regular_grid = bin_dict['X_regular_grid'], bin_dict['Y_regular_grid']
+    dX = jnp.unique(X_regular_grid)[1] - jnp.unique(X_regular_grid)[0]
+    dY = jnp.unique(Y_regular_grid)[1] - jnp.unique(Y_regular_grid)[0]
+    sampler = qmc.Sobol(d=3, scramble=False)
+    sample = sampler.random_base2(m=10)
+
+
+    dict_data = {
+        # 'w0': w0,
+        'v0': v0,
+        's': s,
+
+        # 'Rzphi_density_data': Rzphi_density_data,
+        'XY_density_data': surface_density,
+        'V_data': V_data,
+        'V_data_err': V_data_err,
+        'sigma_data': sigma_data,
+        'sigma_data_err': sigma_data_err,
+        'h1_data': h1_data,
+        'h1_data_err': h1_data_err,
+        'h2_data': h2_data,
+        'h2_data_err': h2_data_err,
+        'h3_data': h3_data,
+        'h3_data_err': h3_data_err,
+        'h4_data': h4_data,
+        'h4_data_err': h4_data_err,
+        'num_per_bin': num_per_bin,
+        'bin_mapping': bin_mapping,
+        'total_bins': total_bins.item(),
+
+        'R_grid': R_grid,
+        'z_grid': z_grid,
+        'phi_grid': phi_grid,
+        'dR': dR,
+        'dz': dz,
+        'dphi': dphi,
+        'sample_for_integration': sample_for_integration,
+
+        'X_regular_grid': X_regular_grid,
+        'Y_regular_grid': Y_regular_grid,
+        'dX': dX,
+        'dY': dY,
+        'sample_for_integration_XY': sample,
+    }
+
+    return dict_data
 
 
 @jax.jit
@@ -41,7 +135,7 @@ def Dehnen_density(x, y, z, params):
 
     p, q, Rs = params['p_bar'], params['q_bar'], params['Rs_bar']
     M = 10.0 ** params['logM_bar']
-    r = jnp.sqrt(x**2 + (y / p)**2 + (z / q)**2)
+    r = jnp.sqrt(x**2 + (y / p)**2 + (z / q)**2) + EPSILON
 
     val = M / (4 * jnp.pi * p * q * Rs**3) * (r / Rs)**(-2) * (1 + r / Rs)**(-2) * jnp.exp(-(z / 3)**4) * jnp.exp(-(r / 10)**4)
 
@@ -54,32 +148,33 @@ def density_func_agama(x):
     return np.array(density_func(x[:, 0], x[:, 1], x[:, 2], params_dict))
 
 if __name__ == "__main__":
-    params_dict = {
-        'rho0_disc': 1e9,
-        'Rd_disc': 3.0,
-        'hz_disc': 0.3,
-        'logM_bar': 10.,
-        'Rs_bar': 5.0,
-        'q_bar': 0.3,
-        'p_bar':0.3,
-        'x_origin': 0.0,
-        'y_origin': 0.0,
-        'z_origin': 0.0,
-        'dirx': 0.0,
-        'diry': 0.0,
-        'dirz': 1.0,
-    }
 
-    samples = np.array([
-        np.random.normal(0, 5, 10000),
-        np.random.normal(0, 5, 10000),
-        np.random.normal(0, 2, 10000)
-    ]).T
+    dict_data = get_dict_data(path)
 
+    logMhalo_best_fit, logrho0_best_fit, logM_bar_best_fit, logRh_disk_best_fit, logRs_disk_best_fit, logHs_disk_best_fit, logRs_bar_best_fit,\
+        alpha_best_fit, beta_best_fit, gamma_best_fit, logLM_best_fit, logOmega_bar = (11.8, 8.8, 10.4, 1.2, 0.45, -0.24, 0.3, 
+                                                                                        30*np.pi/180, 20*np.pi/180, 130*np.pi/180, 0, 1.6)
+
+    alpha = alpha_best_fit * 180/np.pi
+    beta = beta_best_fit * 180/np.pi
+    gamma = gamma_best_fit * 180/np.pi
+    ground_truth = [logMhalo_best_fit,
+                    logrho0_best_fit,
+                    logM_bar_best_fit,
+                    logRh_disk_best_fit,
+                    logRs_disk_best_fit,
+                    logHs_disk_best_fit,
+                    logRs_bar_best_fit,
+                    alpha,
+                    beta,
+                    gamma,
+                    logLM_best_fit,
+                    logOmega_bar,
+    ]
 
     params_halo_pot = {
-        'logM': 11.8,
-        'Rs': 16.0,
+        'logM': ground_truth[0],
+        'Rs':10 ** ground_truth[3],
         'a':1.0,
         'b':1.0,
         'c':1.0,
@@ -90,6 +185,34 @@ if __name__ == "__main__":
         'diry':0.0,
         'dirz':1.0
     }
+
+    params_dict = {
+        'rho0_disc': 10 ** ground_truth[1],
+        'Rd_disc': 10 ** ground_truth[4],
+        'hz_disc': 10 ** ground_truth[5],
+        'light_to_mass_ratio': 10 ** ground_truth[10],
+        'x_origin': 0.0,
+        'y_origin': 0.0,
+        'z_origin': 0.0,
+        'dirx': 0.0,
+        'diry': 0.0,
+        'dirz': 1.0,
+        'alpha': ground_truth[7],
+        'beta': ground_truth[8],
+        'gamma': ground_truth[9],
+        'logM_bar': ground_truth[2],
+        'Rs_bar': 10 ** ground_truth[6],
+        'Omega_bar': 10 ** ground_truth[11],
+        'p_bar': 0.3,
+        'q_bar': 0.3,
+    }
+
+    samples = np.array([
+        np.random.normal(0, 5, 10000),
+        np.random.normal(0, 5, 10000),
+        np.random.normal(0, 2, 10000)
+    ]).T
+
 
     w0 = jnp.array(samples)
     n_particles = w0.shape[0]
@@ -305,21 +428,190 @@ if __name__ == "__main__":
     vx_lf, vy_lf, vz_lf = wN[:,:,3].flatten(), wN[:,:,4].flatten(), wN[:,:,5].flatten()
     print("Leapfrog integration done.")
 
+    alpha, beta, gamma = params_dict['alpha'], params_dict['beta'], params_dict['gamma']
+    rotation_matrix = makeRotationMatrix(alpha, beta, gamma)
+    num_Vbin = dict_data['total_bins']
+    bin_mapping, num_per_bin = dict_data['bin_mapping'], dict_data['num_per_bin']
+    v0, s = dict_data['v0'], dict_data['s']
 
-    @jax.jit
-    def acc_fn(x, y, z):
-        a_halo = NFW_acceleration(x, y, z,  params_halo_pot)
-        a_halo = NFW_acceleration(x, y, z,  params_halo_pot)
-        a_disk = 0#get_acc(x, y, z, dict_phi)
-        return a_halo + a_disk
+    _integrate_vmap = jax.vmap(integrate_leapfrog_barred, 
+                        in_axes=(
+                                0, None, None, 0, None, None, None, 
+                                 None, None, None, 
+                                 None, None, 
+                                 None, None, None, 
+                                 None, None, None))
+
+    Rzphi_lim_grid = jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]])
+    xy_lim_grid = jnp.array([[-12.,12.],[-4.,4.]])
+    Rzphi_n_grid = jnp.array([10,6,6])
+    xy_n_grid = jnp.array([60,40])
+    Rzphi_n_tot = 360
 
     time_start = time.time()
-    _integrate_vmap = jax.vmap(integrate_leapfrog_barred_traj, 
-                            in_axes=(0, None, None, 0, None, None, None))
-    tN, wN = _integrate_vmap(w0_new, acc_fn, N_steps, dt, 0.0, -34.0, False)
-    tN.block_until_ready()
+    Omega_bar = params_dict['Omega_bar']
+    # time = time_integrate #Gyr
+    n_steps = N_steps
+    dt = dt
+    unroll = False
+    initial_time = 0.0
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4 = _integrate_vmap(
+                        w0_new, acc_fn, n_steps, dt, initial_time, -Omega_bar, unroll,
+                        num_Vbin, bin_mapping, num_per_bin,
+                        Rzphi_lim_grid, xy_lim_grid,
+                        Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
+                        v0, s, rotation_matrix)
+    Rzphi_bin_counts.block_until_ready()
+    A_Rzphi = Rzphi_bin_counts.T / n_steps
+    A_xy = surface_density.T / n_steps
+    A_h1 = h1.T
+    A_h2 = h2.T
+    A_h3 = h3.T
+    A_h4 = h4.T
     time_end = time.time()
-    print(f"Time taken to integrate orbits with NFW only: {time_end - time_start:.2f} seconds")
-    x_lf, y_lf, z_lf = wN[:,:,0].flatten(), wN[:,:,1].flatten(), wN[:,:,2].flatten()
-    vx_lf, vy_lf, vz_lf = wN[:,:,3].flatten(), wN[:,:,4].flatten(), wN[:,:,5].flatten()
-    print("Leapfrog integration done.")
+    print(f"Time taken to integrate orbits and compute observables: {time_end - time_start:.2f} seconds")
+
+    @jax.jit
+    def density_func_Rz(R, z, phi, params):
+        x = R * jnp.cos(phi)
+        y = R * jnp.sin(phi)
+        return density_func(x, y, z, params)
+    @partial(jax.jit, static_argnames=['rho_fct'])
+    def get_mass(R_grid, z_grid, phi_grid, rho_fct, dict_params, dR, dz, dphi, sample):
+        R_samples = R_grid + (sample[:,0] - 0.5) * dR
+        z_samples = z_grid + (sample[:,1] - 0.5) * dz
+        phi_samples = phi_grid + (sample[:,2] - 0.5) * dphi
+        density_samples = rho_fct(R_samples, z_samples, phi_samples, dict_params)
+        mass_tot = jnp.sum(density_samples * R_samples) / sample.shape[0]
+        return mass_tot
+    R_grid, dR = dict_data['R_grid'], dict_data['dR']
+    z_grid, dz = dict_data['z_grid'], dict_data['dz']
+    phi_grid, dphi = dict_data['phi_grid'], dict_data['dphi']
+    y_Rzphi = jax.vmap(get_mass, in_axes=[0, 0, 0, None, None, None, None, None, None])(
+                R_grid, z_grid, phi_grid, density_func_Rz, params_dict, dR, dz, dphi, dict_data['sample_for_integration']
+    )
+    # y_Rzphi = dict_data['Rzphi_density_data'].astype(jnp.float32)
+    y_xy = dict_data['XY_density_data'].astype(jnp.float32)
+    y_h1 = dict_data['h1_data'].astype(jnp.float32)
+    y_h2 = dict_data['h2_data'].astype(jnp.float32)
+    y_h3 = dict_data['h3_data'].astype(jnp.float32)
+    y_h4 = dict_data['h4_data'].astype(jnp.float32)
+    y_xy = y_xy / params_dict['light_to_mass_ratio'] # convert from light to mass
+    sig_Rzphi = 0.02 * y_Rzphi + 1e-10
+    sig_xy = 0.01 * y_xy + 1e-10
+    # frac_err_min = 0.1
+    h_err_min = 0.03
+    sig_A1 = jnp.where(h_err_min > dict_data['h1_data_err'], h_err_min, dict_data['h1_data_err']) + EPSILON
+    sig_A2 = jnp.where(h_err_min > dict_data['h2_data_err'], h_err_min, dict_data['h2_data_err']) + EPSILON
+    sig_A3 = jnp.where(h_err_min > dict_data['h3_data_err'], h_err_min, dict_data['h3_data_err']) + EPSILON
+    sig_A4 = jnp.where(h_err_min > dict_data['h4_data_err'], h_err_min, dict_data['h4_data_err']) + EPSILON
+
+    mean_mass_per_orb = jnp.sum(y_Rzphi) / A_Rzphi.shape[1]
+
+    y_xy = y_xy / mean_mass_per_orb
+    sig_xy = sig_xy / mean_mass_per_orb
+    y_Rzphi = y_Rzphi / mean_mass_per_orb
+    sig_Rzphi = sig_Rzphi / mean_mass_per_orb
+
+    path_data = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data/'
+    with open(path_data + 'orbital_library_bar.pkl', 'wb') as f:
+        orb_lib = (A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4, \
+           y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4, \
+           sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4)
+        pickle.dump(orb_lib, f)
+
+
+    weights = jnp.ones(A_Rzphi.shape[1])
+    A_h1, A_h2, A_h3, A_h4 = (A_h1 * A_xy), (A_h2 * A_xy), (A_h3 * A_xy), (A_h4 * A_xy)
+    density_2DXY = A_xy @ weights
+    h1_model = (A_h1 @ weights) / density_2DXY # density_2DXY
+    h2_model = (A_h2 @ weights) / density_2DXY # density_2DXY
+    h3_model = (A_h3 @ weights) / density_2DXY # density_2DXY
+    h4_model = (A_h4 @ weights) / density_2DXY # density_2DXY
+
+    plot = True
+    if plot:
+
+        X_regular_grid = dict_data['X_regular_grid']
+        Y_regular_grid = dict_data['Y_regular_grid']
+
+        bin_mapping = dict_data['bin_mapping']
+        index_remap = bin_mapping[:-1]
+        density_2DXY_weighted = density_2DXY[index_remap]
+        h1_model_weighted = h1_model[index_remap]
+        h2_model_weighted = h2_model[index_remap]
+        h3_model_weighted = h3_model[index_remap]
+        h4_model_weighted = h4_model[index_remap]
+        print(density_2DXY_weighted.shape, X_regular_grid.shape, Y_regular_grid.shape)
+
+        density_mock = y_xy[index_remap]
+        h1_mock = y_h1[index_remap]
+        h2_mock = y_h2[index_remap]
+        h3_mock = y_h3[index_remap]
+        h4_mock = y_h4[index_remap]
+
+        fig, ax = plt.subplots(2, 3, figsize=(24, 10), gridspec_kw={'wspace': 0.5, 'hspace': 0.4,})
+        cb = ax[0,0].scatter(X_regular_grid, Y_regular_grid, c=density_2DXY_weighted.T, cmap='viridis', s = 20, marker='s', norm='log')
+        ax[0,0].set_title('Surface Density (Model)', fontsize=16)
+        ax[0,0].set_xlabel('X (kpc)', fontsize=14)
+        ax[0,0].set_ylabel('Y (kpc)', fontsize=14)
+        fig.colorbar(cb, ax=ax[0,0])
+
+        im1 = ax[0,1].scatter(X_regular_grid, Y_regular_grid, c=h1_model_weighted.T, cmap='coolwarm', s = 20, marker='s')
+        ax[0,1].set_title('h1 (Model)', fontsize=16)
+        ax[0,1].set_xlabel('X (kpc)', fontsize=14)
+        ax[0,1].set_ylabel('Y (kpc)', fontsize=14)
+        fig.colorbar(im1, ax=ax[0,1])
+
+        im2 = ax[0,2].scatter(X_regular_grid, Y_regular_grid, c=h2_model_weighted.T, cmap='coolwarm', s = 20, marker='s')
+        ax[0,2].set_title('h2 (Model)', fontsize=16)
+        ax[0,2].set_xlabel('X (kpc)', fontsize=14)
+        ax[0,2].set_ylabel('Y (kpc)', fontsize=14)
+        fig.colorbar(im2, ax=ax[0,2])
+
+        im3 = ax[1,0].scatter(X_regular_grid, Y_regular_grid, c=h3_model_weighted.T, cmap='coolwarm', s = 20, marker='s')
+        ax[1,0].set_title('h3 (Model)', fontsize=16)
+        ax[1,0].set_xlabel('X (kpc)', fontsize=14)
+        ax[1,0].set_ylabel('Y (kpc)', fontsize=14)
+        fig.colorbar(im3, ax=ax[1,0])
+
+        im4 = ax[1,1].scatter(X_regular_grid, Y_regular_grid, c=h4_model_weighted.T, cmap='coolwarm', s = 20, marker='s')
+        ax[1,1].set_title('h4 (Model)', fontsize=16)
+        ax[1,1].set_xlabel('X (kpc)', fontsize=14)
+        ax[1,1].set_ylabel('Y (kpc)', fontsize=14)
+        fig.colorbar(im4, ax=ax[1,1])
+
+
+        fig, ax = plt.subplots(2, 3, figsize=(24, 10), gridspec_kw={'wspace': 0.5, 'hspace': 0.4,})
+        cb = ax[0,0].scatter(X_regular_grid, Y_regular_grid, c=density_mock.T, cmap='viridis', s = 20, marker='s', norm='log')
+        ax[0,0].set_title('Surface Density (Mock)', fontsize=16)
+        ax[0,0].set_xlabel('X (kpc)', fontsize=14)
+        ax[0,0].set_ylabel('Y (kpc)', fontsize=14)
+        fig.colorbar(cb, ax=ax[0,0])
+
+        im1 = ax[0,1].scatter(X_regular_grid, Y_regular_grid, c=h1_mock.T, cmap='coolwarm', s = 20, marker='s')
+        ax[0,1].set_title('h1 (Mock)', fontsize=16)
+        ax[0,1].set_xlabel('X (kpc)', fontsize=14)
+        ax[0,1].set_ylabel('Y (kpc)', fontsize=14)
+        fig.colorbar(im1, ax=ax[0,1])
+
+        im2 = ax[0,2].scatter(X_regular_grid, Y_regular_grid, c=h2_mock.T, cmap='coolwarm', s = 20, marker='s')
+        ax[0,2].set_title('h2 (Mock)', fontsize=16)
+        ax[0,2].set_xlabel('X (kpc)', fontsize=14)
+        ax[0,2].set_ylabel('Y (kpc)', fontsize=14)
+        fig.colorbar(im2, ax=ax[0,2])
+
+        im3 = ax[1,0].scatter(X_regular_grid, Y_regular_grid, c=h3_mock.T, cmap='coolwarm', s = 20, marker='s')
+        ax[1,0].set_title('h3 (Mock)', fontsize=16)
+        ax[1,0].set_xlabel('X (kpc)', fontsize=14)
+        ax[1,0].set_ylabel('Y (kpc)', fontsize=14)
+        fig.colorbar(im3, ax=ax[1,0])
+
+        im4 = ax[1,1].scatter(X_regular_grid, Y_regular_grid, c=h4_mock.T, cmap='coolwarm', s = 20, marker='s')
+        ax[1,1].set_title('h4 (Mock)', fontsize=16)
+        ax[1,1].set_xlabel('X (kpc)', fontsize=14)
+        ax[1,1].set_ylabel('Y (kpc)', fontsize=14)
+        fig.colorbar(im4, ax=ax[1,1])
+
+        plt.show()
+

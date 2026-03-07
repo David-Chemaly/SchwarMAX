@@ -8,6 +8,7 @@ from functools import partial
 
 from densities import DoubleExponentialDisk_density
 from utils import *
+from constants import KPCGYR_TO_KMS
 
 @jax.jit
 def mapping_norm_to_scale_uniform(dirx, diry, min=0.5, max=1.5):
@@ -140,15 +141,16 @@ def logl_angular_input(params, dict_data, num_Vbin):
 
     logM_halo = params[0]
     logrho0_disc = params[1]
-    logM_bulge = params[2]
+    logM_bar = params[2]
     logRs_halo = params[3]
     logRs_disk = params[4]
     logHs_disk = params[5]
-    logRs_bulge = params[6]
+    logRs_bar = params[6]
     alpha = params[7]
     beta = params[8]
     gamma = params[9]
     log_light_to_mass_ratio = params[10]
+    log_Omega_bar = params[11]
 
     alpha = alpha * 180 / jnp.pi
     beta = beta * 180 / jnp.pi
@@ -182,8 +184,11 @@ def logl_angular_input(params, dict_data, num_Vbin):
         'alpha': alpha,
         'beta': beta,
         'gamma': gamma,
-        'logM_bulge': logM_bulge,
-        'Rs_bulge': 10 ** logRs_bulge,
+        'logM_bar': logM_bar,
+        'Rs_bar': 10 ** logRs_bar,
+        'p_bar': 0.3,
+        'q_bar': 0.3,
+        'Omega_bar': 10**log_Omega_bar * KPCGYR_TO_KMS
     }
 
     surface_density_model = projection(params_baryon_rho, dict_data, num_Vbin)
@@ -259,10 +264,10 @@ def logl_angular_input(params, dict_data, num_Vbin):
 def logl_density(params, dict_data, num_Vbin):
 
     logrho0_disc = params[0]
-    logM_bulge = params[1]
+    logM_bar = params[1]
     logRd_disc = params[2]
     loghz_disc = params[3]
-    logRs_bulge = params[4]
+    logRs_bar = params[4]
     alpha = params[5] * 180 / jnp.pi
     beta = params[6] * 180 / jnp.pi
     gamma = params[7] * 180 / jnp.pi
@@ -282,8 +287,10 @@ def logl_density(params, dict_data, num_Vbin):
         'beta': beta,
         'gamma': gamma,
         'light_to_mass_ratio': 1,
-        'logM_bulge': logM_bulge,
-        'Rs_bulge': 10 ** logRs_bulge,
+        'logM_bar': logM_bar,
+        'Rs_bar': 10 ** logRs_bar,
+        'p_bar': 0.3,
+        'q_bar': 0.3,
     }
 
     surface_density_model = projection(density_param, dict_data, num_Vbin)

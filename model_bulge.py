@@ -28,7 +28,7 @@ from ghMoments import *
 from utils import *
 from constants import EPSILON
 
-from densities import MiyamotoNagai_density, DoubleExponentialDisk_density, Hernquist_density, Dehnen_density
+from densities import MiyamotoNagai_density, DoubleExponentialDisk_density, Hernquist_density
 
 from CylindricalSpline import get_phi_m, get_acc, evaluate_phi_axisymmetric
 
@@ -46,7 +46,7 @@ def potential_func(x, y, z, dict_phi, params_halo):
 def density_func(x, y, z, params):
     """ Returns Stellar Density nu(R, z) """
     # Double Exponential Disk
-    val = DoubleExponentialDisk_density(x, y, z, params) + Dehnen_density(x, y, z, params)
+    val = DoubleExponentialDisk_density(x, y, z, params) + Hernquist_density(x, y, z, params)
     return val
 
 @jax.jit
@@ -305,14 +305,14 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     s = dict_data['s']
     num_per_bin = dict_data['num_per_bin']
     bin_mapping = dict_data['bin_mapping']
-    Omega_bar = params_disk_rho['Omega_bar']
+    # num_Vbin = dict_data['total_bins']
     alpha, beta, gamma = params_disk_rho['alpha'], params_disk_rho['beta'], params_disk_rho['gamma']
     rotation_matrix = makeRotationMatrix(alpha, beta, gamma)
 
     #=========================================== GET DISC POTENTIAL =====================================================
 
-    NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax = 50, 30, 1e-3, 30.0, 1e-3, 15.0, 8.
-    Nphi = 300
+    NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax = 50, 30, 1e-2, 30.0, 1e-2, 15.0, 8.
+    Nphi = 200
     N_int = 10_000
     dict_phi = get_phi_m(density_func, params_disk_rho, NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax, Nphi, N_int)
 
@@ -355,13 +355,8 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
         a_disk = get_acc(x, y, z, dict_phi)
         return a_halo + a_disk
 
-    _integrate_vmap = jax.vmap(integrate_leapfrog_barred, 
-                        in_axes=(
-                                0, None, None, 0, None, None, None, 
-                                 None, None, None, 
-                                 None, None, 
-                                 None, None, None, 
-                                 None, None, None))
+    _integrate_vmap = jax.vmap(integrate_leapfrog_rot, 
+                            in_axes=(0, None, None, 0, None, None, None, None, None, None, None, None, None, None, None, None, None))
 
     Rzphi_lim_grid = jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]])
     xy_lim_grid = jnp.array([[-12.,12.],[-4.,4.]])
@@ -375,7 +370,7 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     unroll = False
     initial_time = 0.0
     Rzphi_bin_counts, surface_density, h1, h2, h3, h4 = _integrate_vmap(
-                        w0_new, acc_fn, n_steps, dt, initial_time, -Omega_bar, unroll,
+                        w0_new, acc_fn, n_steps, dt, initial_time, unroll,
                         num_Vbin, bin_mapping, num_per_bin,
                         Rzphi_lim_grid, xy_lim_grid,
                         Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
@@ -505,14 +500,14 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     s = dict_data['s']
     num_per_bin = dict_data['num_per_bin']
     bin_mapping = dict_data['bin_mapping']
-    Omega_bar = params_disk_rho['Omega_bar']
+    # num_Vbin = dict_data['total_bins']
     alpha, beta, gamma = params_disk_rho['alpha'], params_disk_rho['beta'], params_disk_rho['gamma']
     rotation_matrix = makeRotationMatrix(alpha, beta, gamma)
 
     #=========================================== GET DISC POTENTIAL =====================================================
 
-    NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax = 50, 30, 1e-3, 30.0, 1e-3, 15.0, 8.
-    Nphi = 300
+    NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax = 50, 30, 1e-2, 30.0, 1e-2, 15.0, 8.
+    Nphi = 200
     N_int = 10_000
     dict_phi = get_phi_m(density_func, params_disk_rho, NR, NZ, Rmin, Rmax, Zmin, Zmax, Mmax, Nphi, N_int)
 
@@ -555,13 +550,8 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
         a_disk = get_acc(x, y, z, dict_phi)
         return a_halo + a_disk
 
-    _integrate_vmap = jax.vmap(integrate_leapfrog_barred, 
-                        in_axes=(
-                                 0, None, None, 0, None, None, None, 
-                                 None, None, None, 
-                                 None, None, 
-                                 None, None, None, 
-                                 None, None, None))
+    _integrate_vmap = jax.vmap(integrate_leapfrog_rot, 
+                            in_axes=(0, None, None, 0, None, None, None, None, None, None, None, None, None, None, None, None, None))
 
     Rzphi_lim_grid = jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]])
     xy_lim_grid = jnp.array([[-12.,12.],[-4.,4.]])
@@ -575,7 +565,7 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     unroll = False
     initial_time = 0.0
     Rzphi_bin_counts, surface_density, h1, h2, h3, h4 = _integrate_vmap(
-                        w0_new, acc_fn, n_steps, dt, initial_time, -Omega_bar, unroll,
+                        w0_new, acc_fn, n_steps, dt, initial_time, unroll,
                         num_Vbin, bin_mapping, num_per_bin,
                         Rzphi_lim_grid, xy_lim_grid,
                         Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
@@ -986,10 +976,8 @@ def projection(density_param, dict_data, num_Vbin):
     }
 
     density_param_bulge = {
-        'logM_bar': density_param['logM_bar'],
-        'Rs_bar': density_param['Rs_bar'],
-        'q_bar': 0.3,
-        'p_bar': 0.3,
+        'logM_bulge': density_param['logM_bulge'],
+        'Rs_bulge': density_param['Rs_bulge'],
         'x_origin': 0.0,
         'y_origin': 0.0,
         'z_origin': 0.0,
@@ -1002,7 +990,7 @@ def projection(density_param, dict_data, num_Vbin):
     def density_func_rot(X, Y, Z, rotation_matrix, param_disc, param_bulge):
         pos = jnp.stack([X, Y, Z], axis=-1)
         x, y, z = (rotation_matrix.T @ pos.T)
-        return DoubleExponentialDisk_density(x, y, z, param_disc) + Dehnen_density(x, y, z, param_bulge)
+        return DoubleExponentialDisk_density(x, y, z, param_disc) + Hernquist_density(x, y, z, param_bulge)
     
     @partial(jax.jit, static_argnames=['rho_fct'])
     def get_surface_density(X_grid, Y_grid, rho_fct, dict_params_disc, dict_params_bulge, dX, dY, sample):

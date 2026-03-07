@@ -189,8 +189,8 @@ def Dehnen_density(x, y, z, params):
 
     p, q, Rs = params['p_bar'], params['q_bar'], params['Rs_bar']
     M = 10.0 ** params['logM_bar']
-    r = jnp.sqrt(x**2 + (y / p)**2 + (z / q)**2)
+    r = jnp.sqrt(x**2 + (y / p)**2 + (z / q)**2) + EPSILON
 
-    val = M / (4 * jnp.pi * p * q * Rs**3) * (r / Rs)**(-2) * (1 + r / Rs)**(-2) * jnp.exp(-(z / 3)**4)
+    val = M / (4 * jnp.pi * p * q * Rs**3) * (r / Rs)**(-2) * (1 + r / Rs)**(-2) * jnp.exp(-(z / 3)**4) * jnp.exp(-(r / 10)**4)
 
     return val
