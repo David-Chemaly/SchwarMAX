@@ -343,11 +343,16 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
         _z
     )
 
-    N_step_per_orb = 100
-    N_dynamical_time = 20
-    dt = T_orb / N_step_per_orb
-    time_integrate = T_orb * N_dynamical_time
-    N_steps = N_step_per_orb * N_dynamical_time
+    E_pot = jax.vmap(potential_func, in_axes=(0, 0, 0, None, None))(w0_new[:,0], w0_new[:,1], w0_new[:,2], dict_phi, params_halo_pot)
+    E_kin = 0.5 * (w0_new[:,3]**2 + w0_new[:,4]**2 + w0_new[:,5]**2)
+    E_J = E_pot + E_kin - Omega_bar * (w0_new[:,3] * w0_new[:,1] - w0_new[:,4] * w0_new[:,0])
+
+    w0_new = w0_new[jnp.argsort(E_J)]
+    w0_lowE = w0_new[:5000, :]
+    w0_highE = w0_new[5000:, :]
+    T_orb_lowE = T_orb[jnp.argsort(E_J)][:5000]
+    T_orb_highE = T_orb[jnp.argsort(E_J)][5000:]
+
     #=========================================== Integrate orbits =======================================================
     @jax.jit
     def acc_fn(x, y, z):
@@ -369,23 +374,61 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     xy_n_grid = jnp.array([60,40])
     Rzphi_n_tot = 360
 
+    N_step_per_orb = 200
+    N_dynamical_time = 25
+    dt = T_orb_lowE / N_step_per_orb
+    time_integrate = T_orb_lowE * N_dynamical_time
+    N_steps = N_step_per_orb * N_dynamical_time
+
     time = time_integrate #Gyr
     n_steps = N_steps
     dt = dt
     unroll = False
     initial_time = 0.0
     Rzphi_bin_counts, surface_density, h1, h2, h3, h4 = _integrate_vmap(
-                        w0_new, acc_fn, n_steps, dt, initial_time, -Omega_bar, unroll,
+                        w0_lowE, acc_fn, n_steps, dt, initial_time, -Omega_bar, unroll,
                         num_Vbin, bin_mapping, num_per_bin,
                         Rzphi_lim_grid, xy_lim_grid,
                         Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
                         v0, s, rotation_matrix)
-    A_Rzphi = Rzphi_bin_counts.T / n_steps
-    A_xy = surface_density.T / n_steps
-    A_h1 = h1.T
-    A_h2 = h2.T
-    A_h3 = h3.T
-    A_h4 = h4.T
+    A_Rzphi_1 = Rzphi_bin_counts.T / n_steps
+    A_xy_1 = surface_density.T / n_steps
+    A_h1_1 = h1.T
+    A_h2_1 = h2.T
+    A_h3_1 = h3.T
+    A_h4_1 = h4.T
+
+
+    N_step_per_orb = 100
+    N_dynamical_time = 50
+    dt = T_orb_highE / N_step_per_orb
+    time_integrate = T_orb_highE * N_dynamical_time
+    N_steps = N_step_per_orb * N_dynamical_time
+
+    time = time_integrate #Gyr
+    n_steps = N_steps
+    dt = dt
+    unroll = False
+    initial_time = 0.0
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4 = _integrate_vmap(
+                        w0_highE, acc_fn, n_steps, dt, initial_time, -Omega_bar, unroll,
+                        num_Vbin, bin_mapping, num_per_bin,
+                        Rzphi_lim_grid, xy_lim_grid,
+                        Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
+                        v0, s, rotation_matrix)
+    A_Rzphi_2 = Rzphi_bin_counts.T / n_steps
+    A_xy_2 = surface_density.T / n_steps
+    A_h1_2 = h1.T
+    A_h2_2 = h2.T
+    A_h3_2 = h3.T
+    A_h4_2 = h4.T
+
+    A_Rzphi = jnp.concatenate([A_Rzphi_1, A_Rzphi_2], axis=1)
+    A_xy = jnp.concatenate([A_xy_1, A_xy_2], axis=1)
+    A_h1 = jnp.concatenate([A_h1_1, A_h1_2], axis=1)
+    A_h2 = jnp.concatenate([A_h2_1, A_h2_2], axis=1)
+    A_h3 = jnp.concatenate([A_h3_1, A_h3_2], axis=1)
+    A_h4 = jnp.concatenate([A_h4_1, A_h4_2], axis=1)
 
     #=========================================== Orbital weights optimisation ============================================
 
