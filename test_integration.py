@@ -155,6 +155,10 @@ if __name__ == "__main__":
         alpha_best_fit, beta_best_fit, gamma_best_fit, logLM_best_fit, logOmega_bar = (11.8, 8.8, 10.4, 1.2, 0.45, -0.24, 0.3, 
                                                                                         30*np.pi/180, 20*np.pi/180, 130*np.pi/180, 0, 1.6)
 
+    logMhalo_best_fit, logrho0_best_fit, logM_bar_best_fit, logRh_disk_best_fit, logRs_disk_best_fit, logHs_disk_best_fit, logRs_bar_best_fit,\
+        alpha_best_fit, beta_best_fit, gamma_best_fit, logLM_best_fit, logOmega_bar = (10.07, 9.22, 9.2, 1.95, 0.54, -0.94, 0.35, 0.73, 0.71, 2.45, -0.25, 1.48)  
+
+
     alpha = alpha_best_fit * 180/np.pi
     beta = beta_best_fit * 180/np.pi
     gamma = gamma_best_fit * 180/np.pi
@@ -171,6 +175,7 @@ if __name__ == "__main__":
                     logLM_best_fit,
                     logOmega_bar,
     ]
+
 
     params_halo_pot = {
         'logM': ground_truth[0],
@@ -208,9 +213,9 @@ if __name__ == "__main__":
     }
 
     samples = np.array([
-        np.random.normal(0, 5, 10000),
-        np.random.normal(0, 5, 10000),
-        np.random.normal(0, 2, 10000)
+        np.random.normal(0, 5, 20000),
+        np.random.normal(0, 5, 20000),
+        np.random.normal(0, 2, 20000)
     ]).T
 
 
@@ -514,7 +519,7 @@ if __name__ == "__main__":
     sig_Rzphi = sig_Rzphi / mean_mass_per_orb
 
     path_data = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data/'
-    with open(path_data + 'orbital_library_bar.pkl', 'wb') as f:
+    with open(path_data + 'orbital_library_bar_2.pkl', 'wb') as f:
         orb_lib = (A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4, \
            y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4, \
            sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4)

@@ -175,7 +175,7 @@ if __name__ == "__main__":
            y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4, \
            sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4) = orb_lib
     
-    print(A_h3, A_h4)
+    # print(A_h3, A_h4)
     
     print('Weight solver:', solver)
 
