@@ -8,7 +8,7 @@ from densities import *
 from potentials import *
 from utils import *
 from model import *
-from CylindricalSpline import get_phi_m, get_acc, evaluate_phi_axisymmetric
+from CylindricalSpline import get_phi_m, get_acc, evaluate_phi_axisymmetric, evaluate_phi
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -213,9 +213,9 @@ if __name__ == "__main__":
     }
 
     samples = np.array([
-        np.random.normal(0, 5, 20000),
-        np.random.normal(0, 5, 20000),
-        np.random.normal(0, 2, 20000)
+        np.random.normal(0, 5, 10000),
+        np.random.normal(0, 5, 10000),
+        np.random.normal(0, 2, 10000)
     ]).T
 
 
@@ -450,6 +450,184 @@ if __name__ == "__main__":
     E_J.block_until_ready()
     print('nothing', Omega_bar)
 
+    mask_bad_orb = ((E_J[:,-1] - E_J[:,0]) / E_J[:,0]) < -0.99
+    print(f"Fraction of bad orbits: {jnp.mean(mask_bad_orb):.4f}")
+
+    # ============================== Diagnostics for bad-orbit origin ==============================
+    abs_z_orb = jnp.abs(z_orb)
+    oob_Rmin = R_orb < Rmin
+    oob_Rmax = R_orb > Rmax
+    oob_Zmax = abs_z_orb > Zmax
+    oob_any = oob_Rmin | oob_Rmax | oob_Zmax
+    ever_oob = jnp.any(oob_any, axis=1)
+    oob_frac = jnp.mean(oob_any, axis=1)
+    oob_rmin_frac = jnp.mean(oob_Rmin, axis=1)
+    oob_rmax_frac = jnp.mean(oob_Rmax, axis=1)
+    oob_zmax_frac = jnp.mean(oob_Zmax, axis=1)
+    min_R = jnp.min(R_orb, axis=1)
+    max_R = jnp.max(R_orb, axis=1)
+    min_abs_z = jnp.min(abs_z_orb, axis=1)
+    max_abs_z = jnp.max(abs_z_orb, axis=1)
+
+    phi_halo_orb = jax.vmap(NFW_potential, in_axes=(0, 0, 0, None))(x_orb, y_orb, z_orb, params_halo_pot)
+    phi_disk_orb = E_pot - phi_halo_orb
+    disk_near_zero = jnp.abs(phi_disk_orb) < 1e-10
+    disk_zero_frac = jnp.mean(disk_near_zero, axis=1)
+
+    bad = mask_bad_orb
+    good = ~mask_bad_orb
+    eps = 1e-12
+
+    print(f"[diag] bad ever_oob frac:  {jnp.mean(ever_oob[bad]) if jnp.any(bad) else 0.0:.4f}")
+    print(f"[diag] good ever_oob frac: {jnp.mean(ever_oob[good]) if jnp.any(good) else 0.0:.4f}")
+    print(f"[diag] bad median oob_frac:  {jnp.median(oob_frac[bad]) if jnp.any(bad) else 0.0:.4e}")
+    print(f"[diag] good median oob_frac: {jnp.median(oob_frac[good]) if jnp.any(good) else 0.0:.4e}")
+    print(f"[diag] bad median min(R):  {jnp.median(min_R[bad]) if jnp.any(bad) else 0.0:.4e}")
+    print(f"[diag] good median min(R): {jnp.median(min_R[good]) if jnp.any(good) else 0.0:.4e}")
+    print(f"[diag] bad median max(R):  {jnp.median(max_R[bad]) if jnp.any(bad) else 0.0:.4e}")
+    print(f"[diag] good median max(R): {jnp.median(max_R[good]) if jnp.any(good) else 0.0:.4e}")
+    print(f"[diag] bad median min(|z|):  {jnp.median(min_abs_z[bad]) if jnp.any(bad) else 0.0:.4e}")
+    print(f"[diag] good median min(|z|): {jnp.median(min_abs_z[good]) if jnp.any(good) else 0.0:.4e}")
+    print(f"[diag] bad median max(|z|):  {jnp.median(max_abs_z[bad]) if jnp.any(bad) else 0.0:.4e}")
+    print(f"[diag] good median max(|z|): {jnp.median(max_abs_z[good]) if jnp.any(good) else 0.0:.4e}")
+    print(f"[diag] bad median oob_rmin_frac:  {jnp.median(oob_rmin_frac[bad]) if jnp.any(bad) else 0.0:.4e}")
+    print(f"[diag] good median oob_rmin_frac: {jnp.median(oob_rmin_frac[good]) if jnp.any(good) else 0.0:.4e}")
+    print(f"[diag] bad median oob_rmax_frac:  {jnp.median(oob_rmax_frac[bad]) if jnp.any(bad) else 0.0:.4e}")
+    print(f"[diag] good median oob_rmax_frac: {jnp.median(oob_rmax_frac[good]) if jnp.any(good) else 0.0:.4e}")
+    print(f"[diag] bad median oob_zmax_frac:  {jnp.median(oob_zmax_frac[bad]) if jnp.any(bad) else 0.0:.4e}")
+    print(f"[diag] good median oob_zmax_frac: {jnp.median(oob_zmax_frac[good]) if jnp.any(good) else 0.0:.4e}")
+    print(f"[diag] bad median disk_zero_frac:  {jnp.median(disk_zero_frac[bad]) if jnp.any(bad) else 0.0:.4e}")
+    print(f"[diag] good median disk_zero_frac: {jnp.median(disk_zero_frac[good]) if jnp.any(good) else 0.0:.4e}")
+
+    # ============================== Circularity diagnostics ==============================
+    # eta = Lz / L_circ(E) in the axisymmetric potential.
+    x0 = w0_new[:, 0]
+    y0 = w0_new[:, 1]
+    z0 = w0_new[:, 2]
+    vx0 = w0_new[:, 3]
+    vy0 = w0_new[:, 4]
+    vz0 = w0_new[:, 5]
+    R0_orb = jnp.sqrt(x0*x0 + y0*y0)
+    Lz0 = vx0 * y0 - vy0 * x0
+    E0_axi = 0.5 * (vx0*vx0 + vy0*vy0 + vz0*vz0) + potential_func(x0, y0, z0, dict_phi, params_halo_pot)
+
+    Rc_grid = jnp.geomspace(1e-3, 100.0, 512)
+    dRc = 2e-3
+    phi_c = jax.vmap(lambda r: potential_func(r, 0.0, 0.0, dict_phi, params_halo_pot))(Rc_grid)
+    dphi_dR_c = jax.vmap(lambda r: (potential_func(r + dRc, 0.0, 0.0, dict_phi, params_halo_pot) -
+                                    potential_func(r - dRc, 0.0, 0.0, dict_phi, params_halo_pot)) / (2.0 * dRc))(Rc_grid)
+    vc2 = jnp.maximum(Rc_grid * dphi_dR_c, 1e-12)
+    Ec_grid = phi_c + 0.5 * vc2
+    Lc_grid = Rc_grid * jnp.sqrt(vc2)
+
+    sort_idx = jnp.argsort(Ec_grid)
+    Ec_sorted = Ec_grid[sort_idx]
+    Lc_sorted = Lc_grid[sort_idx]
+    Lc_of_E = jnp.interp(E0_axi, Ec_sorted, Lc_sorted, left=jnp.nan, right=jnp.nan)
+    eta = Lz0 / (Lc_of_E + 1e-12)
+    eta_abs = jnp.abs(eta)
+    finite_eta = jnp.isfinite(eta_abs)
+
+    bad_f = bad & finite_eta
+    good_f = good & finite_eta
+    print(f"[circ] finite eta frac: {jnp.mean(finite_eta):.4f}")
+    print(f"[circ] bad median |eta|:  {jnp.median(eta_abs[bad_f]) if jnp.any(bad_f) else 0.0:.4e}")
+    print(f"[circ] good median |eta|: {jnp.median(eta_abs[good_f]) if jnp.any(good_f) else 0.0:.4e}")
+
+    low1 = finite_eta & (eta_abs < 0.2)
+    low2 = finite_eta & (eta_abs < 0.4)
+    high = finite_eta & (eta_abs > 0.8)
+    print(f"[circ] bad frac among |eta|<0.2: {jnp.mean(mask_bad_orb[low1]) if jnp.any(low1) else 0.0:.4f}")
+    print(f"[circ] bad frac among |eta|<0.4: {jnp.mean(mask_bad_orb[low2]) if jnp.any(low2) else 0.0:.4f}")
+    print(f"[circ] bad frac among |eta|>0.8: {jnp.mean(mask_bad_orb[high]) if jnp.any(high) else 0.0:.4f}")
+
+    # ============================== Diagnostics for "jump" mechanism ==============================
+    bad_idx = jnp.where(mask_bad_orb)[0]
+    n_probe_bad = int(min(256, bad_idx.shape[0]))
+    if n_probe_bad > 0:
+        probe_bad = bad_idx[:n_probe_bad]
+
+        x_bad = x_orb[probe_bad]
+        y_bad = y_orb[probe_bad]
+        z_bad = z_orb[probe_bad]
+        vx_bad = vx_orb[probe_bad]
+        vy_bad = vy_orb[probe_bad]
+        vz_bad = vz_orb[probe_bad]
+        Lz_bad = Lz_orb[probe_bad]
+
+        phi_halo_bad = jax.vmap(NFW_potential, in_axes=(0, 0, 0, None))(x_bad, y_bad, z_bad, params_halo_pot)
+        phi_disk_axi_bad = jax.vmap(evaluate_phi_axisymmetric, in_axes=(0, 0, 0, None))(x_bad, y_bad, z_bad, dict_phi)
+        phi_disk_full_bad = jax.vmap(evaluate_phi, in_axes=(0, 0, 0, None))(x_bad, y_bad, z_bad, dict_phi)
+        E_kin_bad = 0.5 * (vx_bad**2 + vy_bad**2 + vz_bad**2)
+
+        E_J_axi_bad = phi_halo_bad + phi_disk_axi_bad + E_kin_bad - Omega_bar * Lz_bad
+        E_J_full_bad = phi_halo_bad + phi_disk_full_bad + E_kin_bad - Omega_bar * Lz_bad
+
+        frac_bad_axi_probe = jnp.mean(((E_J_axi_bad[:, -1] - E_J_axi_bad[:, 0]) / E_J_axi_bad[:, 0]) < -0.99)
+        frac_bad_full_probe = jnp.mean(((E_J_full_bad[:, -1] - E_J_full_bad[:, 0]) / E_J_full_bad[:, 0]) < -0.99)
+        print(f"[probe] bad subset size: {n_probe_bad}")
+        print(f"[probe] bad frac with axisymmetric E_J def: {frac_bad_axi_probe:.4f}")
+        print(f"[probe] bad frac with full E_J def:         {frac_bad_full_probe:.4f}")
+
+        dE_step_axi = E_J_axi_bad[:, 1:] - E_J_axi_bad[:, :-1]
+        jump_idx = jnp.argmin(dE_step_axi, axis=1) + 1
+        rows = jnp.arange(n_probe_bad)
+
+        R_bad = jnp.sqrt(x_bad*x_bad + y_bad*y_bad)
+        R_jump = R_bad[rows, jump_idx]
+        z_jump = z_bad[rows, jump_idx]
+        absz_jump = jnp.abs(z_jump)
+        x_jump = x_bad[rows, jump_idx]
+        y_jump = y_bad[rows, jump_idx]
+
+        dE_jump_axi = dE_step_axi[rows, jump_idx-1]
+        dE_step_full = E_J_full_bad[:, 1:] - E_J_full_bad[:, :-1]
+        dE_jump_full = dE_step_full[rows, jump_idx-1]
+
+        phi_nonaxi_bad = phi_disk_full_bad - phi_disk_axi_bad
+        phi_nonaxi_jump = phi_nonaxi_bad[rows, jump_idx]
+        E0_axi = E_J_axi_bad[:, 0]
+
+        oob_jump = (R_jump < Rmin) | (R_jump > Rmax) | (absz_jump > Zmax)
+        print(f"[probe] jump-point oob frac: {jnp.mean(oob_jump):.4f}")
+        print(f"[probe] median jump dE_axis / |E0|: {jnp.median(jnp.abs(dE_jump_axi) / (jnp.abs(E0_axi) + 1e-12)):.4e}")
+        print(f"[probe] median jump dE_full / |E0|: {jnp.median(jnp.abs(dE_jump_full) / (jnp.abs(E0_axi) + 1e-12)):.4e}")
+        print(f"[probe] median |phi_nonaxis at jump| / |E0|: {jnp.median(jnp.abs(phi_nonaxi_jump) / (jnp.abs(E0_axi) + 1e-12)):.4e}")
+        print(f"[probe] median R_jump, |z|_jump: {jnp.median(R_jump):.4e}, {jnp.median(absz_jump):.4e}")
+
+        a_disk_jump = jax.vmap(get_acc, in_axes=(0, 0, 0, None))(x_jump, y_jump, z_jump, dict_phi)
+        a_halo_jump = jax.vmap(NFW_acceleration, in_axes=(0, 0, 0, None))(x_jump, y_jump, z_jump, params_halo_pot)
+        amag_disk = jnp.sqrt(jnp.sum(a_disk_jump * a_disk_jump, axis=1))
+        amag_halo = jnp.sqrt(jnp.sum(a_halo_jump * a_halo_jump, axis=1))
+        print(f"[probe] median |a_disk|, |a_halo| at jump: {jnp.median(amag_disk):.4e}, {jnp.median(amag_halo):.4e}")
+        print(f"[probe] median jump step index / N_steps: {jnp.median(jump_idx):.1f} / {N_steps}")
+
+        v_jump = jnp.sqrt(vx_bad[rows, jump_idx]**2 + vy_bad[rows, jump_idx]**2 + vz_bad[rows, jump_idx]**2)
+        dt_bad = dt[probe_bad]
+        amag_tot = jnp.sqrt(jnp.sum((a_disk_jump + a_halo_jump) * (a_disk_jump + a_halo_jump), axis=1))
+        kick_ratio = (amag_tot * dt_bad) / (v_jump + 1e-12)
+        print(f"[probe] median kick ratio |a|*dt/|v| at jump: {jnp.median(kick_ratio):.4e}")
+
+        # Check if disk-force evaluation itself is inconsistent with the disk potential gradient.
+        n_force_probe = int(min(64, n_probe_bad))
+        if n_force_probe > 0:
+            xj = x_jump[:n_force_probe]
+            yj = y_jump[:n_force_probe]
+            zj = z_jump[:n_force_probe]
+            a_disk_an = a_disk_jump[:n_force_probe]
+
+            @jax.jit
+            def disk_acc_fd(xv, yv, zv):
+                d = 1e-4
+                ax = -(evaluate_phi(xv + d, yv, zv, dict_phi) - evaluate_phi(xv - d, yv, zv, dict_phi)) / (2.0 * d)
+                ay = -(evaluate_phi(xv, yv + d, zv, dict_phi) - evaluate_phi(xv, yv - d, zv, dict_phi)) / (2.0 * d)
+                az = -(evaluate_phi(xv, yv, zv + d, dict_phi) - evaluate_phi(xv, yv, zv - d, dict_phi)) / (2.0 * d)
+                return jnp.array([ax, ay, az])
+
+            a_disk_fd = jax.vmap(disk_acc_fd, in_axes=(0, 0, 0))(xj, yj, zj)
+            force_relerr = jnp.sqrt(jnp.sum((a_disk_an - a_disk_fd)**2, axis=1)) / (jnp.sqrt(jnp.sum(a_disk_fd**2, axis=1)) + 1e-12)
+            print(f"[probe] disk-force relerr (analytic vs FD): median={jnp.median(force_relerr):.4e}, max={jnp.max(force_relerr):.4e}")
+
     plots = True
     if plots:
         E_J_argsort = np.argsort(E_J[:,0])
@@ -515,5 +693,3 @@ if __name__ == "__main__":
         fig.suptitle('100 timesteps per crossing time', fontsize = 18)
         plt.tight_layout()
         plt.show()
-
-
