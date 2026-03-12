@@ -473,6 +473,100 @@ def solve_fista_nnls(
     return jax.lax.stop_gradient(w_final)
 
 
+@partial(jax.jit, static_argnames=("maxiter",))
+def solve_nnls_admm(
+    A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+    y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+    sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+    lambda_reg=1, maxiter=200,
+):
+    """
+    Non-negative QP via ADMM (Alternating Direction Method of Multipliers).
+
+    Solves the same problem as solve_qp_boxcdqp:
+        min_{w >= 0}  0.5 w^T Q w + c^T w
+
+    Algorithm:
+      1. Form Q = U.T @ U + reg*I  (one GEMM)
+      2. Cholesky-factor  Q + rho*I  (done once)
+      3. ADMM loop (each step = one triangular solve + elementwise max):
+           w = cho_solve(L, rho*(z - u) - c)
+           z = max(0, w + u)
+           u = u + w - z
+
+    On GPU (T4), expected:
+      Q + Cholesky:  ~0.5-1s  (GEMM + Cholesky on 10000 x 10000)
+      200 iters:     ~0.5-1s  (triangular solves are O(n^2), parallelizable)
+      Total:         ~1-2s    vs ~15s for jaxopt.BoxCDQP
+    """
+    eps = 1e-8
+    y_xy_safe = jnp.where(jnp.abs(y_xy) > eps, y_xy, 1.0)
+
+    w_rzphi = jnp.sqrt(5.0 / A_Rzphi.shape[0])
+    w_xy    = jnp.sqrt(5.0 / A_xy.shape[0])
+    w_h     = jnp.sqrt(1.0 / A_h1.shape[0])
+
+    U_rz  = w_rzphi * (A_Rzphi / (sig_Rzphi[:, None] + eps))
+    y_rz  = w_rzphi * (y_Rzphi / (sig_Rzphi + eps))
+    U_xy_ = w_xy * (A_xy / (sig_xy[:, None] + eps))
+    y_xy_ = w_xy * (y_xy / (sig_xy + eps))
+    U_h1_ = w_h * ((A_h1 * A_xy) / y_xy_safe[:, None] / (sig_A1[:, None] + eps))
+    U_h2_ = w_h * ((A_h2 * A_xy) / y_xy_safe[:, None] / (sig_A2[:, None] + eps))
+    U_h3_ = w_h * ((A_h3 * A_xy) / y_xy_safe[:, None] / (sig_A3[:, None] + eps))
+    U_h4_ = w_h * ((A_h4 * A_xy) / y_xy_safe[:, None] / (sig_A4[:, None] + eps))
+    y_h1_ = w_h * (y_h1 / (sig_A1 + eps))
+    y_h2_ = w_h * (y_h2 / (sig_A2 + eps))
+    y_h3_ = w_h * (y_h3 / (sig_A3 + eps))
+    y_h4_ = w_h * (y_h4 / (sig_A4 + eps))
+
+    U = jnp.vstack([U_rz, U_xy_, U_h1_, U_h2_, U_h3_, U_h4_])
+    y = jnp.concatenate([y_rz, y_xy_, y_h1_, y_h2_, y_h3_, y_h4_])
+
+    n_orb = U.shape[1]
+    reg   = lambda_reg / n_orb
+
+    # Step 1: Form Q and c — identical to solve_qp_boxcdqp
+    Q = U.T @ U + reg * jnp.eye(n_orb, dtype=U.dtype)
+    c = -(U.T @ y)
+
+    # ADMM penalty parameter — standard heuristic: rho = trace(Q) / n
+    rho = jnp.trace(Q) / n_orb
+
+    # Step 2: Cholesky factorization of (Q + rho*I) — done once
+    L_chol = jnp.linalg.cholesky(Q + rho * jnp.eye(n_orb, dtype=U.dtype))
+
+    # Initial state
+    w_init = jnp.ones(n_orb, dtype=U.dtype) * (jnp.sum(y_Rzphi) / n_orb)
+    z_init = w_init.copy()
+    u_init = jnp.zeros(n_orb, dtype=U.dtype)
+
+    # Over-relaxation parameter (Boyd et al. 2011, Section 3.4.3)
+    # alpha in [1.5, 1.8] typically accelerates ADMM convergence.
+    alpha = 1.6
+
+    # Step 3: ADMM iterations with over-relaxation
+    def admm_step(carry, _):
+        w, z, u = carry
+        # w-update: solve (Q + rho*I) w = rho*(z - u) - c
+        rhs = rho * (z - u) - c
+        w_new = jax.scipy.linalg.cho_solve((L_chol, True), rhs)
+        # Over-relaxation: blend w_new toward z
+        w_hat = alpha * w_new + (1.0 - alpha) * z
+        # z-update: proximal operator for non-negativity
+        z_new = jnp.maximum(0.0, w_hat + u)
+        # u-update: dual variable
+        u_new = u + w_hat - z_new
+        return (w_new, z_new, u_new), None
+
+    (_, z_final, _), _ = jax.lax.scan(
+        admm_step,
+        (w_init, z_init, u_init),
+        xs=None,
+        length=maxiter,
+    )
+    # z is the non-negative solution
+    return jax.lax.stop_gradient(z_final)
+
 
 # @jax.jit
 @partial(jax.jit, static_argnames=('num_Vbin'))
@@ -668,11 +762,11 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     
     ############################## QP solver ###############################
 
-    weights = solve_fista_nnls(
+    weights = solve_nnls_admm(
                             A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
                             y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
                             sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-                            lambda_reg=1, maxiter=500,
+                            lambda_reg=1, maxiter=200,
     )
 
     #===================================== Calculate the net kinematics of the model =========================================
@@ -1085,6 +1179,13 @@ def get_weights(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
             y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
             sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
             maxiter=solver_maxiter, power_iters=solver_power_iters,
+        )
+    elif solver == "admm":
+        weights = solve_nnls_admm(
+            A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+            y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+            sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+            maxiter=solver_maxiter,
         )
     elif solver == "qp":
         weights = solve_qp_boxcdqp(
