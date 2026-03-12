@@ -440,9 +440,15 @@ def integrate_leapfrog_barred(w0, acc_fn, pot_fn, n_steps, dt = 0.010, t0 = 0.0,
     # (segment_sum discards indices >= num_segments; we replicate that by
     #  writing OOB into slot num_segments_Rzphi and slicing it off at the end).
     # ------------------------------------------------------------------
+    # Precompute initial acceleration to enable stored-acceleration leapfrog
+    # (1 acc_fn call per step instead of 2)
+    r0_init, v0_init = _split(w0)
+    a_init = acc_fn(*r0_init)
+
     init_carry = (
         t0,
         w0,
+        a_init,
         jnp.zeros(num_segments_Rzphi + 1, dtype=jnp.float32),
         jnp.zeros(num_Vbin,               dtype=jnp.float32),
         jnp.zeros(num_Vbin,               dtype=jnp.float32),
@@ -452,12 +458,12 @@ def integrate_leapfrog_barred(w0, acc_fn, pot_fn, n_steps, dt = 0.010, t0 = 0.0,
     )
 
     def step(carry, _):
-        t, y, Rzphi_counts, counts, sw1, sw2, sw3, sw4 = carry
+        t, y, a_prev, Rzphi_counts, counts, sw1, sw2, sw3, sw4 = carry
         r, vel = _split(y)
 
-        # --- Leapfrog KDK in rotating (bar) frame ---
-        a0     = acc_fn(*r)
-        v_half = vel + 0.5 * dt * a0
+        # --- Stored-acceleration leapfrog KDK in rotating (bar) frame ---
+        # Reuse acceleration from previous step (or initial computation)
+        v_half = vel + 0.5 * dt * a_prev
 
         # Drift + exact bar-frame rotation over dt
         x_bar = r[0] + dt * v_half[0]
@@ -474,6 +480,7 @@ def integrate_leapfrog_barred(w0, acc_fn, pot_fn, n_steps, dt = 0.010, t0 = 0.0,
         v_rot   = jnp.array([vx_rot, vy_rot, vz_rot])
         t_new   = t + dt
 
+        # Single acceleration evaluation per step (stored for next step)
         a1    = acc_fn(*r_new)
         v_new = v_rot + 0.5 * dt * a1
         y_new_state = _merge(r_new, v_new)
@@ -515,12 +522,12 @@ def integrate_leapfrog_barred(w0, acc_fn, pot_fn, n_steps, dt = 0.010, t0 = 0.0,
         sw3    = sw3.at[Vbin_idx].add(w3_val)
         sw4    = sw4.at[Vbin_idx].add(w4_val)
 
-        return (t_new, y_new_state, Rzphi_counts, counts, sw1, sw2, sw3, sw4), None
+        return (t_new, y_new_state, a1, Rzphi_counts, counts, sw1, sw2, sw3, sw4), None
 
     final_carry, _ = jax.lax.scan(
         step, init_carry, xs=None, length=n_steps, unroll=unroll
     )
-    _, y_final, Rzphi_counts, counts, sw1, sw2, sw3, sw4 = final_carry
+    _, y_final, _, Rzphi_counts, counts, sw1, sw2, sw3, sw4 = final_carry
 
     # Discard the OOB slot (index num_segments_Rzphi)
     Rzphi_counts = Rzphi_counts[:num_segments_Rzphi]

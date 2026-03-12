@@ -30,10 +30,35 @@ def NFW_potential(x, y, z, params):
 
 @jax.jit
 def NFW_acceleration(x, y, z, params):
-    def potential_vec(pos):
-        return NFW_potential(pos[0], pos[1], pos[2], params)
-    grad_phi = jax.grad(potential_vec)(jnp.array([x, y, z]))
-    return -grad_phi
+    """Analytic gradient of NFW potential — avoids jax.grad overhead."""
+    rin = _shift(x, y, z, params)
+    rvec = _rotate(rin, params)
+    rx, ry, rz = rvec
+    a, b, c = params['a'], params['b'], params['c']
+
+    rx_a2 = rx / (a * a)
+    ry_b2 = ry / (b * b)
+    rz_c2 = rz / (c * c)
+    r2 = rx * rx_a2 + ry * ry_b2 + rz * rz_c2 + EPSILON
+    r = jnp.sqrt(r2)
+
+    GM = G * 10 ** params['logM']
+    Rs = params['Rs']
+    s = r / Rs  # r / Rs
+    log1s = jnp.log(1.0 + s)
+
+    # dPhi/dr = -GM * [1 / (r * (Rs + r)) - log(1+s) / r^2]
+    dPhi_dr = -GM * (1.0 / (r * (Rs + r) + EPSILON) - log1s / (r2 + EPSILON))
+
+    # dr/d(rx) = rx/(a^2 * r), chain rule to Cartesian via rotation
+    inv_r = 1.0 / (r + EPSILON)
+    grad_rotated = dPhi_dr * inv_r * jnp.array([rx_a2, ry_b2, rz_c2])
+
+    # Chain rule through rotation: dPhi/d(x,y,z) = R^T @ dPhi/d(rx,ry,rz)
+    R = get_mat(params['dirx'], params['diry'], params['dirz'])
+    grad_original = R.T @ grad_rotated
+
+    return -grad_original
 
 @jax.jit
 def NFW_hessian(x, y, z, params):
