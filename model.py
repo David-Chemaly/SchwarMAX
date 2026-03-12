@@ -353,6 +353,109 @@ def solve_qp_boxcdqp(
     return jax.lax.stop_gradient(sol.params)
 
 
+@partial(jax.jit, static_argnames=("maxiter",))
+def solve_fista_nnls(
+    A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+    y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+    sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+    lambda_reg=1, maxiter=200,
+):
+    """
+    Non-negative orbital weight estimation via FISTA.
+
+    Solves the same problem as solve_qp_boxcdqp:
+        min_{w >= 0}  0.5 ||U w - b||^2 + 0.5 (lambda_reg / n_orb) ||w||^2
+
+    Key difference: never forms the n_orb x n_orb Gram matrix Q = U.T @ U.
+    Instead each FISTA iteration uses two O(m * n_orb) matrix-vector products
+    with U (shape m x n_orb, m ~ 5500, n_orb ~ 10000).
+
+    Cost comparison (n=10000, m=5500):
+      BoxCDQP:    O(n^2 * m) = 5.5e11 FLOPs  to build Q  (the 15-second step)
+                + O(n^2)     per iteration on Q
+      FISTA:      O(m * n)   = 5.5e7  FLOPs  per iteration (no Q ever formed)
+
+    Lipschitz constant L = max_eigenvalue(U.T @ U) + reg is estimated via
+    30 power-iteration steps (60 matvecs) which is negligible compared to
+    the savings from not building Q.
+    """
+    eps = 1e-8
+    y_xy_safe = jnp.where(jnp.abs(y_xy) > eps, y_xy, 1.0)
+
+    # Identical weighting/scaling as solve_qp_boxcdqp
+    w_rzphi = jnp.sqrt(5.0 / A_Rzphi.shape[0])
+    w_xy    = jnp.sqrt(5.0 / A_xy.shape[0])
+    w_h     = jnp.sqrt(1.0 / A_h1.shape[0])
+
+    U_rz  = w_rzphi * (A_Rzphi / (sig_Rzphi[:, None] + eps))
+    b_rz  = w_rzphi * (y_Rzphi / (sig_Rzphi + eps))
+
+    U_xy_ = w_xy * (A_xy / (sig_xy[:, None] + eps))
+    b_xy  = w_xy * (y_xy / (sig_xy + eps))
+
+    U_h1_ = w_h * ((A_h1 * A_xy) / y_xy_safe[:, None] / (sig_A1[:, None] + eps))
+    U_h2_ = w_h * ((A_h2 * A_xy) / y_xy_safe[:, None] / (sig_A2[:, None] + eps))
+    U_h3_ = w_h * ((A_h3 * A_xy) / y_xy_safe[:, None] / (sig_A3[:, None] + eps))
+    U_h4_ = w_h * ((A_h4 * A_xy) / y_xy_safe[:, None] / (sig_A4[:, None] + eps))
+    b_h1  = w_h * (y_h1 / (sig_A1 + eps))
+    b_h2  = w_h * (y_h2 / (sig_A2 + eps))
+    b_h3  = w_h * (y_h3 / (sig_A3 + eps))
+    b_h4  = w_h * (y_h4 / (sig_A4 + eps))
+
+    U = jnp.vstack([U_rz, U_xy_, U_h1_, U_h2_, U_h3_, U_h4_])
+    b = jnp.concatenate([b_rz, b_xy, b_h1, b_h2, b_h3, b_h4])
+
+    n_orb = U.shape[1]
+    reg   = jnp.array(lambda_reg, dtype=U.dtype) / n_orb
+
+    # ------------------------------------------------------------------
+    # Estimate Lipschitz constant L = max_eigenvalue(U.T @ U) + reg
+    # via power iteration (30 steps, 60 total matvecs with U).
+    # A tight L gives the largest possible step size and fastest convergence.
+    # ------------------------------------------------------------------
+    v0 = jnp.ones(n_orb, dtype=U.dtype) / jnp.sqrt(float(n_orb))
+
+    def power_step(v, _):
+        v = U.T @ (U @ v)
+        return v / (jnp.linalg.norm(v) + 1e-30), None
+
+    v_eig, _ = jax.lax.scan(power_step, v0, xs=None, length=30)
+    Uv = U @ v_eig
+    # Rayleigh quotient = largest eigenvalue of U.T @ U
+    L  = jnp.dot(Uv, Uv) / (jnp.dot(v_eig, v_eig) + 1e-30) + reg
+    lr = 1.0 / L
+
+    # Same initial guess as solve_qp_boxcdqp
+    w_init = jnp.ones(n_orb, dtype=U.dtype) * (jnp.sum(y_Rzphi) / n_orb)
+
+    # ------------------------------------------------------------------
+    # FISTA iterations (Beck & Teboulle 2009).
+    # carry = (w, z, t)
+    #   w: current iterate (non-negative)
+    #   z: extrapolated point (used to compute gradient)
+    #   t: momentum scalar
+    # Each step: gradient at z, proximal step = max(0, z - lr*grad).
+    # Convergence rate O(1/k^2) vs O(1/k) for plain projected gradient.
+    # ------------------------------------------------------------------
+    def fista_step(carry, _):
+        w, z, t = carry
+        residual = U @ z - b
+        grad     = U.T @ residual + reg * z
+        w_new    = jnp.maximum(0.0, z - lr * grad)
+        t_new    = 0.5 * (1.0 + jnp.sqrt(1.0 + 4.0 * t * t))
+        beta     = (t - 1.0) / t_new
+        z_new    = w_new + beta * (w_new - w)
+        return (w_new, z_new, t_new), None
+
+    (w_final, _, _), _ = jax.lax.scan(
+        fista_step,
+        (w_init, w_init, jnp.ones((), dtype=U.dtype)),
+        xs=None,
+        length=maxiter,
+    )
+    return jax.lax.stop_gradient(w_final)
+
+
 
 # @jax.jit
 @partial(jax.jit, static_argnames=('num_Vbin'))
@@ -548,11 +651,11 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     
     ############################## QP solver ###############################
 
-    weights = solve_qp_boxcdqp(
+    weights = solve_fista_nnls(
                             A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
                             y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
                             sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-                            lambda_reg=1, maxiter=100, tol=1e-1
+                            lambda_reg=1, maxiter=200,
     )
 
     #===================================== Calculate the net kinematics of the model =========================================
