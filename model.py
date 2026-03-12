@@ -1063,11 +1063,10 @@ def get_weights(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
     s = dict_data['s']
 
     if solver == "nnls":
-        weights = solve_nonnegative_nonlinear_cg(
+        weights = solve_fista_nnls(
             A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
             y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
             sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-            l2=1.0, maxiter=solver_maxiter, method="polak-ribiere",
         )
     elif solver == "qp":
         weights = solve_qp_boxcdqp(
