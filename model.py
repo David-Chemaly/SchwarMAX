@@ -353,31 +353,31 @@ def solve_qp_boxcdqp(
     return jax.lax.stop_gradient(sol.params)
 
 
-@partial(jax.jit, static_argnames=("maxiter",))
+@partial(jax.jit, static_argnames=("maxiter", "power_iters"))
 def solve_fista_nnls(
     A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
     y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
     sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-    lambda_reg=1, maxiter=200,
+    lambda_reg=1, maxiter=500, power_iters=50,
 ):
     """
-    Non-negative orbital weight estimation via FISTA.
+    Non-negative orbital weight estimation via FISTA with adaptive restart.
 
     Solves the same problem as solve_qp_boxcdqp:
         min_{w >= 0}  0.5 ||U w - b||^2 + 0.5 (lambda_reg / n_orb) ||w||^2
 
-    Key difference: never forms the n_orb x n_orb Gram matrix Q = U.T @ U.
-    Instead each FISTA iteration uses two O(m * n_orb) matrix-vector products
-    with U (shape m x n_orb, m ~ 5500, n_orb ~ 10000).
+    Never forms the n_orb x n_orb Gram matrix Q = U.T @ U.
+    Each iteration uses two O(m * n_orb) matvecs with U.
 
-    Cost comparison (n=10000, m=5500):
-      BoxCDQP:    O(n^2 * m) = 5.5e11 FLOPs  to build Q  (the 15-second step)
-                + O(n^2)     per iteration on Q
-      FISTA:      O(m * n)   = 5.5e7  FLOPs  per iteration (no Q ever formed)
-
-    Lipschitz constant L = max_eigenvalue(U.T @ U) + reg is estimated via
-    30 power-iteration steps (60 matvecs) which is negligible compared to
-    the savings from not building Q.
+    Three correctness fixes vs the original broken FISTA:
+      1. Extrapolated point z is projected onto the non-negative orthant.
+         Without this, z goes negative, the gradient at z is meaningless for
+         the constrained problem, and the iterates diverge.
+      2. Gradient restart (O'Donoghue & Candes 2015): momentum is reset when
+         grad(z) . (w_new - w) > 0, i.e. the gradient opposes the momentum.
+         Costs only one O(n) dot product — no extra matvec.
+      3. Lipschitz safety margin (×1.05) prevents step-size overestimation
+         from causing oscillations.
     """
     eps = 1e-8
     y_xy_safe = jnp.where(jnp.abs(y_xy) > eps, y_xy, 1.0)
@@ -409,9 +409,8 @@ def solve_fista_nnls(
     reg   = jnp.array(lambda_reg, dtype=U.dtype) / n_orb
 
     # ------------------------------------------------------------------
-    # Estimate Lipschitz constant L = max_eigenvalue(U.T @ U) + reg
-    # via power iteration (30 steps, 60 total matvecs with U).
-    # A tight L gives the largest possible step size and fastest convergence.
+    # Lipschitz constant L = max_eigenvalue(U.T @ U) + reg
+    # via power iteration, with 5% safety margin.
     # ------------------------------------------------------------------
     v0 = jnp.ones(n_orb, dtype=U.dtype) / jnp.sqrt(float(n_orb))
 
@@ -419,32 +418,50 @@ def solve_fista_nnls(
         v = U.T @ (U @ v)
         return v / (jnp.linalg.norm(v) + 1e-30), None
 
-    v_eig, _ = jax.lax.scan(power_step, v0, xs=None, length=30)
+    v_eig, _ = jax.lax.scan(power_step, v0, xs=None, length=power_iters)
     Uv = U @ v_eig
-    # Rayleigh quotient = largest eigenvalue of U.T @ U
-    L  = jnp.dot(Uv, Uv) / (jnp.dot(v_eig, v_eig) + 1e-30) + reg
+    L  = 1.05 * jnp.dot(Uv, Uv) / (jnp.dot(v_eig, v_eig) + 1e-30) + reg
     lr = 1.0 / L
 
     # Same initial guess as solve_qp_boxcdqp
     w_init = jnp.ones(n_orb, dtype=U.dtype) * (jnp.sum(y_Rzphi) / n_orb)
 
+    # Precompute U.T @ b once (reused every iteration)
+    UTb = U.T @ b
+
     # ------------------------------------------------------------------
-    # FISTA iterations (Beck & Teboulle 2009).
+    # FISTA with gradient restart (O'Donoghue & Candes 2015).
+    #
     # carry = (w, z, t)
     #   w: current iterate (non-negative)
-    #   z: extrapolated point (used to compute gradient)
-    #   t: momentum scalar
-    # Each step: gradient at z, proximal step = max(0, z - lr*grad).
-    # Convergence rate O(1/k^2) vs O(1/k) for plain projected gradient.
+    #   z: extrapolated point (also projected non-negative)
+    #   t: momentum scalar (reset to 1 on restart)
+    #
+    # Per iteration: 2 matvecs with U + O(n) restart check.
     # ------------------------------------------------------------------
     def fista_step(carry, _):
         w, z, t = carry
-        residual = U @ z - b
-        grad     = U.T @ residual + reg * z
+
+        # Gradient at z (z is already non-negative from projection)
+        Uz       = U @ z
+        grad     = U.T @ Uz - UTb + reg * z
         w_new    = jnp.maximum(0.0, z - lr * grad)
-        t_new    = 0.5 * (1.0 + jnp.sqrt(1.0 + 4.0 * t * t))
-        beta     = (t - 1.0) / t_new
-        z_new    = w_new + beta * (w_new - w)
+
+        # Gradient restart: reset momentum when the gradient at the
+        # extrapolated point opposes the step direction (w_new - w).
+        # This is the O'Donoghue & Candes criterion; costs only O(n).
+        restart  = jnp.dot(grad, w_new - w) > 0.0
+        t_eff    = jnp.where(restart, 1.0, t)
+
+        t_new    = 0.5 * (1.0 + jnp.sqrt(1.0 + 4.0 * t_eff * t_eff))
+        beta     = (t_eff - 1.0) / t_new
+
+        # Extrapolated point, projected onto non-negative orthant.
+        # This is the critical fix: without projection z can go very
+        # negative, making the gradient at z meaningless for the
+        # constrained problem and causing convergence to a wrong point.
+        z_new    = jnp.maximum(0.0, w_new + beta * (w_new - w))
+
         return (w_new, z_new, t_new), None
 
     (w_final, _, _), _ = jax.lax.scan(
@@ -655,7 +672,7 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
                             A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
                             y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
                             sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-                            lambda_reg=1, maxiter=200,
+                            lambda_reg=1, maxiter=500,
     )
 
     #===================================== Calculate the net kinematics of the model =========================================
@@ -1067,6 +1084,7 @@ def get_weights(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
             A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
             y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
             sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+            maxiter=solver_maxiter, power_iters=solver_power_iters,
         )
     elif solver == "qp":
         weights = solve_qp_boxcdqp(
