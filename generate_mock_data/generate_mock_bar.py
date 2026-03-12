@@ -105,19 +105,21 @@ def rotate(posvel, angle):
 # mass_data = data['mass']
 
 mass_unit = 1/((G*u.Msun).to(u.kpc*(u.km/u.s)**2))
-w0_data, mass_data = agama.readSnapshot(f'/data/hz420-2/SchwarMAX/Bar_model_TG21/model/t_t0_2.5')#snap_t0_3
+w0_data, mass_data = agama.readSnapshot(f'/data/hz420-2/SchwarMAX/Bar_model_TG21/model/t_t0_4')#snap_t0_3
 mass_data = mass_data * mass_unit.value
 
 mask = (mass_data!=np.unique(mass_data)[-1])
 w0_data = w0_data[mask]
 mass_data = mass_data[mask]
 
-w0_data[:,0] = w0_data[:,0] - np.mean(w0_data[:,0])
-w0_data[:,1] = w0_data[:,1] - np.mean(w0_data[:,1])
-w0_data[:,2] = w0_data[:,2] - np.mean(w0_data[:,2])
-w0_data[:,3] = w0_data[:,3] - np.mean(w0_data[:,3])
-w0_data[:,4] = w0_data[:,4] - np.mean(w0_data[:,4])
-w0_data[:,5] = w0_data[:,5] - np.mean(w0_data[:,5])
+R = np.sqrt(w0_data[:,0]**2 + w0_data[:,1]**2)
+mask = R < 5
+w0_data[:,0] = w0_data[:,0] - np.sum(w0_data[mask,0] * mass_data[mask]) / np.sum(mass_data[mask])
+w0_data[:,1] = w0_data[:,1] - np.sum(w0_data[mask,1] * mass_data[mask]) / np.sum(mass_data[mask])
+w0_data[:,2] = w0_data[:,2] - np.sum(w0_data[mask,2] * mass_data[mask]) / np.sum(mass_data[mask])
+w0_data[:,3] = w0_data[:,3] - np.sum(w0_data[mask,3] * mass_data[mask]) / np.sum(mass_data[mask])
+w0_data[:,4] = w0_data[:,4] - np.sum(w0_data[mask,4] * mass_data[mask]) / np.sum(mass_data[mask])
+w0_data[:,5] = w0_data[:,5] - np.sum(w0_data[mask,5] * mass_data[mask]) / np.sum(mass_data[mask])
 
 w0_data[:,0] = -w0_data[:,0]
 w0_data[:,3] = -w0_data[:,3]
@@ -128,7 +130,7 @@ rot_angle = -bar_angle0
 w0_data = rotate(w0_data, rot_angle)  # rotate to make it anticlockwise
 
 
-alpha, beta, gamma = 30, 20, 130
+alpha, beta, gamma = 30, 20, 140
 rot_mat = makeRotationMatrix(alpha, beta, gamma)
 x_data, v_data = w0_data[:,:3], w0_data[:,3:]
 x_data = (rot_mat @ x_data.T).T
