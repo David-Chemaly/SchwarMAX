@@ -169,7 +169,7 @@ if __name__ == "__main__":
     solver_cg_maxiter = int(os.environ.get("WEIGHT_SOLVER_CG_MAXITER", "8"))
 
     path_data = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data/'
-    with open(path_data + 'orbital_library_bar.pkl', 'rb') as f:
+    with open(path_data + 'orbital_library_bar_4.pkl', 'rb') as f:
         orb_lib = pickle.load(f)
     (A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4, \
            y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4, \
