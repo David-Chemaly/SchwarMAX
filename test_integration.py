@@ -2,7 +2,7 @@ import agama
 agama.setUnits(mass=1, length=1, velocity=1)
 
 from constants import *
-from integrants_with_binning import integrate_leapfrog_barred
+from integrants_with_binning import integrate_leapfrog_barred, _integrate_batch_vmap, _integrate_barred_vmap
 from sample_from_density import sample_from_density_grid
 from densities import *
 from potentials import *
@@ -144,6 +144,14 @@ def Dehnen_density(x, y, z, params):
 def density_func(x, y, z, params):
     return Dehnen_density(x, y, z, params) + DoubleExponentialDisk_density(x, y, z, params)
 
+@jax.jit
+def potential_func(x, y, z, dict_phi, params_halo):
+    """ Returns Phi(R, z) """
+    phi_halo = NFW_potential(x, y, z, params_halo)
+    phi_disk = evaluate_phi_axisymmetric(x, y, z, dict_phi)
+    return phi_halo + phi_disk
+
+
 def density_func_agama(x):
     return np.array(density_func(x[:, 0], x[:, 1], x[:, 2], params_dict))
 
@@ -155,8 +163,8 @@ if __name__ == "__main__":
         alpha_best_fit, beta_best_fit, gamma_best_fit, logLM_best_fit, logOmega_bar = (11.8, 8.8, 10.4, 1.2, 0.45, -0.24, 0.3, 
                                                                                         30*np.pi/180, 20*np.pi/180, 130*np.pi/180, 0, 1.6)
 
-    logMhalo_best_fit, logrho0_best_fit, logM_bar_best_fit, logRh_disk_best_fit, logRs_disk_best_fit, logHs_disk_best_fit, logRs_bar_best_fit,\
-        alpha_best_fit, beta_best_fit, gamma_best_fit, logLM_best_fit, logOmega_bar = (10.07, 9.22, 9.2, 1.95, 0.54, -0.94, 0.35, 0.73, 0.71, 2.45, -0.25, 1.48)  
+    # logMhalo_best_fit, logrho0_best_fit, logM_bar_best_fit, logRh_disk_best_fit, logRs_disk_best_fit, logHs_disk_best_fit, logRs_bar_best_fit,\
+    #     alpha_best_fit, beta_best_fit, gamma_best_fit, logLM_best_fit, logOmega_bar = (10.07, 9.22, 9.2, 1.95, 0.54, -0.94, 0.35, 0.73, 0.71, 2.45, -0.25, 1.48)  
 
 
     alpha = alpha_best_fit * 180/np.pi
@@ -212,12 +220,30 @@ if __name__ == "__main__":
         'q_bar': 0.3,
     }
 
+    n_samples = 10_000  # Same number as original data
+    x_grid = np.linspace(0, 15, 1000)
+    logP_xexp = XexpX_pdf_log(x_grid, 4.0)
+    key = jax.random.PRNGKey(10086)
+    R_samples = sample_from_logP(x_grid, logP_xexp, n_samples, key)
+    phi_samples = np.random.uniform(0, 2*np.pi, size=n_samples)
+
+    x_samples, y_samples = R_samples * np.cos(phi_samples), R_samples * np.sin(phi_samples)
+
+    x_grid = np.linspace(0, 4, 1000)
+    logP_exp = expX_pdf_log(x_grid, 1.5)
+    key = jax.random.PRNGKey(10010)
+    z_samples = sample_from_logP(x_grid, logP_exp, n_samples, key)
     samples = np.array([
-        np.random.normal(0, 5, 20000),
-        np.random.normal(0, 5, 20000),
-        np.random.normal(0, 2, 20000)
+        x_samples,
+        y_samples,
+        z_samples,
     ]).T
 
+    # samples = np.array([
+    #     jnp.array(np.random.normal(0, 4., 5000)),
+    #     jnp.array(np.random.normal(0, 4., 5000)),
+    #     jnp.array(np.random.normal(0, 2., 5000)),
+    # ]).T
 
     w0 = jnp.array(samples)
     n_particles = w0.shape[0]
@@ -343,6 +369,39 @@ if __name__ == "__main__":
     key1, key2, key3 = jax.random.PRNGKey(42), jax.random.PRNGKey(109), jax.random.PRNGKey(2026)
     w0_new = get_w0_new(w0, key1, key2, key3, n_particles)
 
+    _R = jnp.sqrt(w0_new[:,0]**2 + w0_new[:,1]**2)
+    _z = w0_new[:,2]
+
+    _Vc = jax.vmap(get_rotation_curve, in_axes=(0, None, None, 0))(
+        _R,
+        potential_func,
+        (dict_phi, params_halo_pot),
+        _z
+    )
+
+    n_realizations = 10
+    key = jax.random.PRNGKey(911)
+    keys = jax.random.split(key, 6)
+    d_scale = 0.1 * jnp.ones(_R.shape) # 0.1 kpc positional ditching
+    v_scale = 0.1 * _Vc # 10% velocity ditching
+    v_scale = jnp.clip(v_scale, a_min=1, a_max = 15) # limiting the noise with 1 - 15 kpc/Gyr
+    noise_x = (jax.random.uniform(keys[0], (n_particles, n_realizations,)) - 0.5) * d_scale[:, jnp.newaxis]
+    noise_y = (jax.random.uniform(keys[1], (n_particles, n_realizations,)) - 0.5) * d_scale[:, jnp.newaxis]
+    noise_z = (jax.random.uniform(keys[2], (n_particles, n_realizations,)) - 0.5) * d_scale[:, jnp.newaxis]
+    noise_vx = (jax.random.uniform(keys[3], (n_particles, n_realizations,)) - 0.5) * v_scale[:, jnp.newaxis]
+    noise_vy = (jax.random.uniform(keys[4], (n_particles, n_realizations,)) - 0.5) * v_scale[:, jnp.newaxis]
+    noise_vz = (jax.random.uniform(keys[5], (n_particles, n_realizations,)) - 0.5) * v_scale[:, jnp.newaxis]
+
+    w0_new_batch = w0_new[:, jnp.newaxis, :]
+    w0_new_batch = w0_new_batch + jnp.stack([noise_x, noise_y, noise_z, noise_vx, noise_vy, noise_vz], axis=-1)
+    T_orb = jax.vmap(estimate_orbital_timescale, in_axes=(0, None, None, 0))(
+        _R,
+        potential_func,
+        (dict_phi, params_halo_pot),
+        _z
+    )
+    T_orb_batch = T_orb[:, jnp.newaxis].repeat(n_realizations, axis=1)
+
 
     def _split(w):
         return w[:3], w[3:]
@@ -400,16 +459,6 @@ if __name__ == "__main__":
 
         return tN, wN 
 
-    _R = jnp.sqrt(w0_new[:,0]**2 + w0_new[:,1]**2)
-    _z = w0_new[:,2]
-
-    T_orb = jax.vmap(estimate_orbital_timescale, in_axes=(0, None, None, 0))(
-        _R,
-        potential_func,
-        (dict_phi, params_halo_pot),
-        _z
-    )
-
     N_step_per_orb = 100
     N_dynamical_time = 20
     dt = T_orb / N_step_per_orb
@@ -421,6 +470,11 @@ if __name__ == "__main__":
         a_halo = NFW_acceleration(x, y, z,  params_halo_pot)
         a_disk = get_acc(x, y, z, dict_phi)
         return a_halo + a_disk
+    
+    @jax.jit
+    def pot_fn(x, y, z):
+        return potential_func(x, y, z, dict_phi, params_halo_pot)
+    pot_fn = jax.vmap(pot_fn, in_axes=(0, 0, 0))
 
     time_start = time.time()
     _integrate_vmap = jax.vmap(integrate_leapfrog_barred_traj, 
@@ -439,14 +493,6 @@ if __name__ == "__main__":
     bin_mapping, num_per_bin = dict_data['bin_mapping'], dict_data['num_per_bin']
     v0, s = dict_data['v0'], dict_data['s']
 
-    _integrate_vmap = jax.vmap(integrate_leapfrog_barred, 
-                        in_axes=(
-                                0, None, None, 0, None, None, None, 
-                                 None, None, None, 
-                                 None, None, 
-                                 None, None, None, 
-                                 None, None, None))
-
     Rzphi_lim_grid = jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]])
     xy_lim_grid = jnp.array([[-12.,12.],[-4.,4.]])
     Rzphi_n_grid = jnp.array([10,6,6])
@@ -457,15 +503,21 @@ if __name__ == "__main__":
     Omega_bar = params_dict['Omega_bar']
     # time = time_integrate #Gyr
     n_steps = N_steps
-    dt = dt
+    dt_batch = T_orb_batch / N_step_per_orb
     unroll = False
     initial_time = 0.0
-    Rzphi_bin_counts, surface_density, h1, h2, h3, h4 = _integrate_vmap(
-                        w0_new, acc_fn, n_steps, dt, initial_time, -Omega_bar, unroll,
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid = _integrate_barred_vmap(
+                        w0_new, acc_fn, pot_fn, n_steps, dt, initial_time, -Omega_bar, unroll,
                         num_Vbin, bin_mapping, num_per_bin,
                         Rzphi_lim_grid, xy_lim_grid,
                         Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
                         v0, s, rotation_matrix)
+    # Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid = _integrate_batch_vmap(
+    #                     w0_new_batch, acc_fn, pot_fn, n_steps, dt_batch, initial_time, -Omega_bar, unroll,
+    #                     num_Vbin, bin_mapping, num_per_bin,
+    #                     Rzphi_lim_grid, xy_lim_grid,
+    #                     Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
+    #                     v0, s, rotation_matrix)
     Rzphi_bin_counts.block_until_ready()
     A_Rzphi = Rzphi_bin_counts.T / n_steps
     A_xy = surface_density.T / n_steps
@@ -475,7 +527,9 @@ if __name__ == "__main__":
     A_h4 = h4.T
     time_end = time.time()
     print(f"Time taken to integrate orbits and compute observables: {time_end - time_start:.2f} seconds")
-
+    print(A_Rzphi.shape)
+    print(jnp.unique(valid, return_counts=True))
+    print(np.isnan(A_h1).sum(), np.isnan(A_h2).sum(), np.isnan(A_h3).sum(), np.isnan(A_h4).sum())
     @jax.jit
     def density_func_Rz(R, z, phi, params):
         x = R * jnp.cos(phi)
@@ -519,7 +573,7 @@ if __name__ == "__main__":
     sig_Rzphi = sig_Rzphi / mean_mass_per_orb
 
     path_data = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data/'
-    with open(path_data + 'orbital_library_bar_2.pkl', 'wb') as f:
+    with open(path_data + 'orbital_library_bar_1.pkl', 'wb') as f:
         orb_lib = (A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4, \
            y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4, \
            sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4)
@@ -547,7 +601,6 @@ if __name__ == "__main__":
         h2_model_weighted = h2_model[index_remap]
         h3_model_weighted = h3_model[index_remap]
         h4_model_weighted = h4_model[index_remap]
-        print(density_2DXY_weighted.shape, X_regular_grid.shape, Y_regular_grid.shape)
 
         density_mock = y_xy[index_remap]
         h1_mock = y_h1[index_remap]
@@ -619,4 +672,3 @@ if __name__ == "__main__":
         fig.colorbar(im4, ax=ax[1,1])
 
         plt.show()
-

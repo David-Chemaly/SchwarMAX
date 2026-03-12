@@ -392,9 +392,8 @@ def integrate_leapfrog_rot(w0, acc_fn, n_steps, dt = 0.010, t0 = 0.0, unroll=Tru
     return Rzphi_bin_counts, surface_density, h1, h2, h3, h4
 
 
-
-@partial(jax.jit, static_argnames=('acc_fn', 'n_steps', 'unroll', 'num_Vbin', 'num_segments_Rzphi'))
-def integrate_leapfrog_barred(w0, acc_fn, n_steps, dt = 0.010, t0 = 0.0, Omega = 0.0, unroll=True, 
+@partial(jax.jit, static_argnames=('acc_fn', 'pot_fn', 'n_steps', 'unroll', 'num_Vbin', 'num_segments_Rzphi'))
+def integrate_leapfrog_barred(w0, acc_fn, pot_fn, n_steps, dt = 0.010, t0 = 0.0, Omega = 0.0, unroll=True, 
                             num_Vbin = 1028, bin_mapping = jnp.zeros(2400, dtype=jnp.int32), num_per_bin = jnp.zeros(1028, dtype=jnp.int32),
                             Rzphi_minmax=jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]]), XY_minmax=jnp.array([[-10.,10.],[-2.,2.]]),
                             nRzphi=jnp.array([10,6,6]), nXY=jnp.array([40,30]), num_segments_Rzphi=360,
@@ -446,70 +445,102 @@ def integrate_leapfrog_barred(w0, acc_fn, n_steps, dt = 0.010, t0 = 0.0, Omega =
 
     (_, _), (tN, wN) = jax.lax.scan(step, (t0, w0), xs=None, length=n_steps, unroll=unroll)
 
+    x_orb = wN[:,0]
+    y_orb = wN[:,1]
+    z_orb = wN[:,2]
+    vx_orb = wN[:,3]
+    vy_orb = wN[:,4]
+    vz_orb = wN[:,5]
+    Lz_orb = (vx_orb * y_orb - vy_orb * x_orb)
+
+    E_pot = pot_fn(x_orb, y_orb, z_orb)
+    E_kin = 0.5 * (vx_orb**2 + vy_orb**2 + vz_orb**2)
+    E_J = E_pot + E_kin - Omega * Lz_orb
+    delta_EJ = jnp.fabs(E_J[-1]/E_J[0] - 1)
+
+    # wN0 = wN
+    # wN1 = jnp.array([ wN[:,0],  wN[:,1], -wN[:,2],  wN[:,3],  wN[:,4], -wN[:,5]]).T # Symmetry: x, y, z, vx, vy, vz -> x, y, -z, vx, vy, -vz
+    # wN2 = jnp.array([-wN[:,0], -wN[:,1],  wN[:,2], -wN[:,3], -wN[:,4],  wN[:,5]]).T # Symmetry: -x, -y, z, -vx, -vy, vz -> -x, -y, z, -vx, -vy, vz
+    # wN3 = jnp.array([-wN[:,0], -wN[:,1], -wN[:,2], -wN[:,3], -wN[:,4], -wN[:,5]]).T # Symmetry: -x, -y, -z, -vx, -vy, -vz -> -x, -y, -z, -vx, -vy, -vz
+    # wN = jnp.concatenate([wN0, wN1, wN2, wN3], axis=0)
+
     # Get 3D grid before rotation
-    Rzphi = jnp.array([jnp.sqrt(wN[:,0]**2 + wN[:,1]**2), wN[:,2], jnp.arctan2(wN[:,1], wN[:,0])]).T
+    def good_orb(wN):
+        Rzphi = jnp.array([jnp.sqrt(wN[:,0]**2 + wN[:,1]**2), wN[:,2], jnp.arctan2(wN[:,1], wN[:,0])]).T
 
-    x = wN[:,:3]
-    v = wN[:,3:]
-    x_rot = (rotation_matrix @ x.T).T
-    v_rot = (rotation_matrix @ v.T).T
-    wN = jnp.concatenate([x_rot, v_rot], axis=-1)
+        x = wN[:,:3]
+        v = wN[:,3:]
+        x_rot = (rotation_matrix @ x.T).T
+        v_rot = (rotation_matrix @ v.T).T
+        wN = jnp.concatenate([x_rot, v_rot], axis=-1)
 
-    # rN, vN = wN[:, :3], wN[:, 3:]
-    XY = jnp.array([wN[:,0], wN[:,2]]).T
+        # rN, vN = wN[:, :3], wN[:, 3:]
+        XY = jnp.array([wN[:,0], wN[:,2]]).T
 
-    Rzphi_strides = jnp.concatenate([jnp.array([1]), jnp.cumprod(nRzphi[:-1])])
-    Rzphi_indices = assign_regular_grid(Rzphi,
-                                        grid_min=Rzphi_minmax[:,0],
-                                        grid_max=Rzphi_minmax[:,1],
-                                        n_bins=nRzphi,
-                                        strides=Rzphi_strides)
+        Rzphi_strides = jnp.concatenate([jnp.array([1]), jnp.cumprod(nRzphi[:-1])])
+        Rzphi_indices = assign_regular_grid(Rzphi,
+                                            grid_min=Rzphi_minmax[:,0],
+                                            grid_max=Rzphi_minmax[:,1],
+                                            n_bins=nRzphi,
+                                            strides=Rzphi_strides)
 
-    # jax.debug.print("Rzphi_indices: {Rzphi_indices}", Rzphi_indices=Rzphi_indices)
-    Rzphi_bin_counts = jax.ops.segment_sum(jnp.ones_like(Rzphi_indices), Rzphi_indices, num_segments=num_segments_Rzphi)
+        # jax.debug.print("Rzphi_indices: {Rzphi_indices}", Rzphi_indices=Rzphi_indices)
+        Rzphi_bin_counts = jax.ops.segment_sum(jnp.ones_like(Rzphi_indices), Rzphi_indices, num_segments=num_segments_Rzphi)
+        
+        XY_strdides = jnp.concatenate([jnp.array([1]), jnp.cumprod(nXY[:-1])])
+        XY_indices = assign_regular_grid(XY,
+                                        grid_min=XY_minmax[:,0],
+                                        grid_max=XY_minmax[:,1],
+                                        n_bins=nXY,
+                                        strides=XY_strdides)
+        
+        area_pixel = ( (XY_minmax[0,1] - XY_minmax[0,0]) / nXY[0] ) * ( (XY_minmax[1,1] - XY_minmax[1,0]) / nXY[1] ) * 1e6
+        
+        # ==========================================================================
+        # Mapping the regular grid XY_indices to Voronoi bin indices
+        Vbin_indices = bin_mapping[XY_indices]
+
+
+        # ==========================================================================
+        # Compute Gauss-Hermite coefficients in each XY cell
+
+        v0_cell = v0[Vbin_indices]
+        s_cell = s[Vbin_indices]
+
+        vy = wN[:,4] * KPCGYR_TO_KMS
+        w = (vy - v0_cell) / s_cell # (v_los - v0) / s, where in edge-on case v_los = vy = wN[:,4]
+        counts = jax.ops.segment_sum(jnp.ones_like(vy), Vbin_indices, num_segments=num_Vbin)
+        sum_w1 = jax.ops.segment_sum(w, Vbin_indices, num_segments=num_Vbin)
+        sum_w2 = jax.ops.segment_sum(w**2, Vbin_indices, num_segments=num_Vbin)
+        sum_w3 = jax.ops.segment_sum(w**3, Vbin_indices, num_segments=num_Vbin)
+        sum_w4 = jax.ops.segment_sum(w**4, Vbin_indices, num_segments=num_Vbin)
+        eps = EPSILON
+        norm = counts + eps
+        w1 = sum_w1 / norm
+        w2 = sum_w2 / norm
+        w3 = sum_w3 / norm
+        w4 = sum_w4 / norm
+        
+        h1 = w1
+        h2 = ((w2 - 1) / jnp.sqrt(2))
+        h3 = ((w3 - 3 * w1) / jnp.sqrt(6))
+        h4 = ((w4 - 6 * w2 + 3) / jnp.sqrt(24))
+        # Nxy = counts
+        surface_density = counts / (num_per_bin * area_pixel + eps)
+
+        return Rzphi_bin_counts.astype(jnp.float32), surface_density, h1, h2, h3, h4, 1.
     
-    XY_strdides = jnp.concatenate([jnp.array([1]), jnp.cumprod(nXY[:-1])])
-    XY_indices = assign_regular_grid(XY,
-                                    grid_min=XY_minmax[:,0],
-                                    grid_max=XY_minmax[:,1],
-                                    n_bins=nXY,
-                                    strides=XY_strdides)
+    def bad_orb(wN):
+        Rzphi_bin_counts = jnp.zeros(num_segments_Rzphi)
+        surface_density = jnp.zeros(num_Vbin)
+        h1 = jnp.zeros(num_Vbin)
+        h2 = jnp.zeros(num_Vbin)
+        h3 = jnp.zeros(num_Vbin)
+        h4 = jnp.zeros(num_Vbin)
+        return Rzphi_bin_counts, surface_density, h1, h2, h3, h4, 0.
     
-    area_pixel = ( (XY_minmax[0,1] - XY_minmax[0,0]) / nXY[0] ) * ( (XY_minmax[1,1] - XY_minmax[1,0]) / nXY[1] ) * 1e6
-    
-    # ==========================================================================
-    # Mapping the regular grid XY_indices to Voronoi bin indices
-    Vbin_indices = bin_mapping[XY_indices]
-
-
-    # ==========================================================================
-    # Compute Gauss-Hermite coefficients in each XY cell
-
-    v0_cell = v0[Vbin_indices]
-    s_cell = s[Vbin_indices]
-
-    vy = wN[:,4] * KPCGYR_TO_KMS
-    w = (vy - v0_cell) / s_cell # (v_los - v0) / s, where in edge-on case v_los = vy = wN[:,4]
-    counts = jax.ops.segment_sum(jnp.ones_like(vy), Vbin_indices, num_segments=num_Vbin)
-    sum_w1 = jax.ops.segment_sum(w, Vbin_indices, num_segments=num_Vbin)
-    sum_w2 = jax.ops.segment_sum(w**2, Vbin_indices, num_segments=num_Vbin)
-    sum_w3 = jax.ops.segment_sum(w**3, Vbin_indices, num_segments=num_Vbin)
-    sum_w4 = jax.ops.segment_sum(w**4, Vbin_indices, num_segments=num_Vbin)
-    eps = EPSILON
-    norm = counts + eps
-    w1 = sum_w1 / norm
-    w2 = sum_w2 / norm
-    w3 = sum_w3 / norm
-    w4 = sum_w4 / norm
-    
-    h1 = w1
-    h2 = ((w2 - 1) / jnp.sqrt(2))
-    h3 = ((w3 - 3 * w1) / jnp.sqrt(6))
-    h4 = ((w4 - 6 * w2 + 3) / jnp.sqrt(24))
-    # Nxy = counts
-    surface_density = counts / (num_per_bin * area_pixel + eps)
-
-    return Rzphi_bin_counts, surface_density, h1, h2, h3, h4
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid = jax.lax.cond(delta_EJ<0.5, good_orb, bad_orb, wN)
+    return Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid
 
 
 
@@ -563,3 +594,56 @@ def integrate_leapfrog_barred_traj(w0, acc_fn, n_steps, dt = 0.010, t0 = 0.0, Om
     (_, _), (tN, wN) = jax.lax.scan(step, (t0, w0), xs=None, length=n_steps, unroll=unroll)
 
     return tN, wN 
+
+
+_integrate_barred_vmap = jax.vmap(integrate_leapfrog_barred, 
+                    in_axes=(
+                            0, None, None, None, 0, None, None, None, 
+                            None, None, None, 
+                            None, None, 
+                            None, None, None, 
+                            None, None, None))
+
+@partial(jax.jit, static_argnames=('acc_fn', 'pot_fn', 'n_steps', 'unroll', 'num_Vbin', 'num_segments_Rzphi'))
+def integrate_batch(w0, acc_fn, pot_fn, n_steps, dt = 0.010, t0 = 0.0, Omega = 0.0, unroll=True, 
+                    num_Vbin = 1028, bin_mapping = jnp.zeros(2400, dtype=jnp.int32), num_per_bin = jnp.zeros(1028, dtype=jnp.int32),
+                    Rzphi_minmax=jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]]), XY_minmax=jnp.array([[-10.,10.],[-2.,2.]]),
+                    nRzphi=jnp.array([10,6,6]), nXY=jnp.array([40,30]), num_segments_Rzphi=360,
+                    v0 = jnp.zeros(1028), s= jnp.ones(1028) * 5.0, rotation_matrix = jnp.eye(3)
+                    ):
+    
+
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid = _integrate_barred_vmap(
+                        w0, acc_fn, pot_fn, n_steps, dt, t0, -Omega, unroll,
+                        num_Vbin, bin_mapping, num_per_bin,
+                        Rzphi_minmax, XY_minmax,
+                        nRzphi, nXY, num_segments_Rzphi,
+                        v0, s, rotation_matrix)
+    A_Rzphi = Rzphi_bin_counts.T / n_steps
+    A_xy = surface_density.T / n_steps
+    A_h1 = h1.T
+    A_h2 = h2.T
+    A_h3 = h3.T
+    A_h4 = h4.T
+
+    weights = jnp.ones(A_Rzphi.shape[1]) / (valid.sum() + 0.1) #A_Rzphi.shape[1]
+
+    A_h1, A_h2, A_h3, A_h4 = (A_h1 * A_xy), (A_h2 * A_xy), (A_h3 * A_xy), (A_h4 * A_xy)
+
+    Rzphi_bin_counts = A_Rzphi @ weights
+    surface_density = A_xy @ weights
+
+    h1 = A_h1 @ weights / (surface_density + EPSILON)
+    h2 = A_h2 @ weights / (surface_density + EPSILON)
+    h3 = A_h3 @ weights / (surface_density + EPSILON)
+    h4 = A_h4 @ weights / (surface_density + EPSILON)
+
+    return Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid.sum()
+
+_integrate_batch_vmap = jax.vmap(integrate_batch, 
+                    in_axes=(
+                            0, None, None, None, 0, None, None, None, 
+                            None, None, None, 
+                            None, None, 
+                            None, None, None, 
+                            None, None, None))

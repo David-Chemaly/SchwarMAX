@@ -24,6 +24,7 @@ import multiprocessing as mp
 
 from potentials import *
 from integrants_with_binning import *
+from integrants_with_binning import _integrate_barred_vmap
 from ghMoments import *
 from utils import *
 from constants import EPSILON
@@ -294,6 +295,64 @@ def solve_nonnegative_nonlinear_cg(
     return jax.lax.stop_gradient(x_hat)
 
 
+@partial(jax.jit, static_argnames=("maxiter", "tol"))
+def solve_qp_boxcdqp(
+    A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+    y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+    sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+    lambda_reg=1, maxiter=100, tol=1e-1,
+):
+    """
+    Box-constrained QP solver for non-negative orbital weights.
+
+    Objective:
+        min_w 0.5 * ||U w - y||^2 + 0.5 * lambda_reg * ||w||^2
+        s.t.  w >= 0
+
+    The weighted design matrix U follows the same relative term weighting
+    as _nll_z for Rzphi / XY / h1-h4 blocks.
+    """
+    eps = 1e-8
+
+    y_xy_safe = jnp.where(jnp.abs(y_xy) > eps, y_xy, 1.0)
+
+    w_rzphi = jnp.sqrt(5.0 / A_Rzphi.shape[0])
+    w_xy = jnp.sqrt(5.0 / A_xy.shape[0])
+    w_h = jnp.sqrt(1.0 / A_h1.shape[0])
+
+    U_rz = w_rzphi * (A_Rzphi / (sig_Rzphi[:, None] + eps))
+    y_rz = w_rzphi * (y_Rzphi / (sig_Rzphi + eps))
+
+    U_xy = w_xy * (A_xy / (sig_xy[:, None] + eps))
+    y_xy_obs = w_xy * (y_xy / (sig_xy + eps))
+
+    U_h1 = w_h * ((A_h1 * A_xy) / y_xy_safe[:, None] / (sig_A1[:, None] + eps))
+    U_h2 = w_h * ((A_h2 * A_xy) / y_xy_safe[:, None] / (sig_A2[:, None] + eps))
+    U_h3 = w_h * ((A_h3 * A_xy) / y_xy_safe[:, None] / (sig_A3[:, None] + eps))
+    U_h4 = w_h * ((A_h4 * A_xy) / y_xy_safe[:, None] / (sig_A4[:, None] + eps))
+
+    y_h1_obs = w_h * (y_h1 / (sig_A1 + eps))
+    y_h2_obs = w_h * (y_h2 / (sig_A2 + eps))
+    y_h3_obs = w_h * (y_h3 / (sig_A3 + eps))
+    y_h4_obs = w_h * (y_h4 / (sig_A4 + eps))
+
+    U = jnp.vstack([U_rz, U_xy, U_h1, U_h2, U_h3, U_h4])
+    y = jnp.concatenate([y_rz, y_xy_obs, y_h1_obs, y_h2_obs, y_h3_obs, y_h4_obs])
+
+    n_orb = U.shape[1]
+    Q = U.T @ U + (lambda_reg / n_orb) * jnp.eye(n_orb, dtype=U.dtype)
+    c = -(U.T @ y)
+
+    lb = jnp.zeros((n_orb,), dtype=U.dtype)
+    ub = jnp.full((n_orb,), jnp.inf, dtype=U.dtype)
+
+    w0 = jnp.ones((n_orb,), dtype=U.dtype) * (jnp.sum(y_Rzphi) / n_orb)
+
+    solver = jaxopt.BoxCDQP(maxiter=maxiter, tol=tol, verbose=False, implicit_diff=False)
+    sol = solver.run(w0, params_obj=(Q, c), params_ineq=(lb, ub))
+    return jax.lax.stop_gradient(sol.params)
+
+
 
 # @jax.jit
 @partial(jax.jit, static_argnames=('num_Vbin'))
@@ -359,14 +418,12 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
         a_halo = NFW_acceleration(x, y, z,  params_halo_pot)
         a_disk = get_acc(x, y, z, dict_phi)
         return a_halo + a_disk
+    
+    @jax.jit
+    def pot_fn(x, y, z):
+        return potential_func(x, y, z, dict_phi, params_halo_pot)
+    pot_fn = jax.vmap(pot_fn, in_axes=(0, 0, 0))
 
-    _integrate_vmap = jax.vmap(integrate_leapfrog_barred, 
-                        in_axes=(
-                                0, None, None, 0, None, None, None, 
-                                 None, None, None, 
-                                 None, None, 
-                                 None, None, None, 
-                                 None, None, None))
 
     Rzphi_lim_grid = jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]])
     xy_lim_grid = jnp.array([[-12.,12.],[-4.,4.]])
@@ -385,8 +442,8 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     dt = dt
     unroll = False
     initial_time = 0.0
-    Rzphi_bin_counts, surface_density, h1, h2, h3, h4 = _integrate_vmap(
-                        w0_lowE, acc_fn, n_steps, dt, initial_time, -Omega_bar, unroll,
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, _ = _integrate_barred_vmap(
+                        w0_lowE, acc_fn, pot_fn, n_steps, dt, initial_time, -Omega_bar, unroll,
                         num_Vbin, bin_mapping, num_per_bin,
                         Rzphi_lim_grid, xy_lim_grid,
                         Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
@@ -410,8 +467,8 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     dt = dt
     unroll = False
     initial_time = 0.0
-    Rzphi_bin_counts, surface_density, h1, h2, h3, h4 = _integrate_vmap(
-                        w0_highE, acc_fn, n_steps, dt, initial_time, -Omega_bar, unroll,
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, _ = _integrate_barred_vmap(
+                        w0_highE, acc_fn, pot_fn, n_steps, dt, initial_time, -Omega_bar, unroll,
                         num_Vbin, bin_mapping, num_per_bin,
                         Rzphi_lim_grid, xy_lim_grid,
                         Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
@@ -430,7 +487,7 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     A_h3 = jnp.concatenate([A_h3_1, A_h3_2], axis=1)
     A_h4 = jnp.concatenate([A_h4_1, A_h4_2], axis=1)
 
-    #=========================================== Orbital weights optimisation ============================================
+    #================================== Preprocess the obtained matrices ============================================
 
     @jax.jit
     def density_func_Rz(R, z, phi, params):
@@ -481,32 +538,22 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     # A_Rzphi = A_Rzphi / mean_mass_per_orb
     sig_Rzphi = sig_Rzphi / mean_mass_per_orb
 
+    #=========================================== Orbital weights optimisation ===========================================
 
-    weights = solve_lbfgs_softplus(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
-                                    y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
-                                    sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-                                    l2=10, maxiter=1000)
-    # weights = solve_nonnegative_nonlinear_cg(
-    #     A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
-    #     y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
-    #     sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-    #     l2=1.0, maxiter=2000, method="polak-ribiere",)
-    # weights = solve_two_stage(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+    ############################## LBFGS solver ###############################
+    # weights = solve_lbfgs_softplus(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
     #                                 y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
     #                                 sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-    #                                 l2=1, maxiter=500)
-    # weights = solve_qp(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
-    #                                 y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
-    #                                 sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-    #                                 l2=1e-3, maxiter=500)
-    # weights = solve_fista(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
-    #                                 y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
-    #                                 sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-    #                                 l2=1e-3, maxiter=500)
+    #                                 l2=10, maxiter=1000)
+    
+    ############################## QP solver ###############################
 
-    # weights = jax.lax.stop_gradient(weights)
-
-    # weights = jnp.ones(A_Rzphi.shape[1]) / A_Rzphi.shape[1]
+    weights = solve_qp_boxcdqp(
+                            A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+                            y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+                            sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+                            lambda_reg=1, maxiter=100, tol=1e-1
+    )
 
     #===================================== Calculate the net kinematics of the model =========================================
 
@@ -920,11 +967,10 @@ def get_weights(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
             l2=1.0, maxiter=solver_maxiter, method="polak-ribiere",
         )
     elif solver == "qp":
-        weights = solve_nonnegative_nonlinear_cg(
+        weights = solve_qp_boxcdqp(
             A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
             y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
             sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-            l2=1.0, maxiter=solver_maxiter, method="fletcher-reeves",
         )
     elif solver == "lbfgs":
         weights = solve_lbfgs_softplus(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
