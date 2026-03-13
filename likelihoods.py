@@ -188,11 +188,11 @@ def logl_angular_input(params, dict_data, num_Vbin):
         'Rs_bar': 10 ** logRs_bar,
         'p_bar': 0.3,
         'q_bar': 0.3,
-        'Omega_bar': 10**log_Omega_bar * KPCGYR_TO_KMS
+        'Omega_bar': 10**log_Omega_bar
     }
 
     surface_density_model = projection(params_baryon_rho, dict_data, num_Vbin)
-    surface_density_gt = dict_data['XY_density_data']
+    surface_density_gt = dict_data['XY_density_data'] / params_baryon_rho['light_to_mass_ratio']
 
     chi2 = jnp.sum((surface_density_gt - surface_density_model)**2 / (0.1 * surface_density_gt)**2)
     logl_density = -0.5 * chi2 / num_Vbin
@@ -254,14 +254,14 @@ def logl_angular_input(params, dict_data, num_Vbin):
         return logl
     
 
-    val = jax.lax.cond(logl_density < logl_density_max - 100, true_func, false_func)
+    val = jax.lax.cond(logl_density < logl_density_max - 1000, true_func, false_func)
     # val = false_func()
     # val = (val // 5) * 5 # bin the log-likelihood to reduce stochasticity
     return val
     
 
 @partial(jax.jit, static_argnames=('num_Vbin'))
-def logl_density(params, dict_data, num_Vbin):
+def logl_density(params, dict_data, num_Vbin, light_to_mass_ratio=1.0):
 
     logrho0_disc = params[0]
     logM_bar = params[1]
@@ -286,7 +286,7 @@ def logl_density(params, dict_data, num_Vbin):
         'alpha': alpha,
         'beta': beta,
         'gamma': gamma,
-        'light_to_mass_ratio': 1,
+        'light_to_mass_ratio': light_to_mass_ratio,
         'logM_bar': logM_bar,
         'Rs_bar': 10 ** logRs_bar,
         'p_bar': 0.3,
@@ -294,7 +294,7 @@ def logl_density(params, dict_data, num_Vbin):
     }
 
     surface_density_model = projection(density_param, dict_data, num_Vbin)
-    surface_density_gt = dict_data['XY_density_data']
+    surface_density_gt = dict_data['XY_density_data'] / density_param['light_to_mass_ratio']
 
     chi2 = jnp.sum((surface_density_gt - surface_density_model)**2 / (0.1 * surface_density_gt)**2)
     logl = -0.5 * chi2 / num_Vbin

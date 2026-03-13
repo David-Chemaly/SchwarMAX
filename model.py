@@ -353,6 +353,220 @@ def solve_qp_boxcdqp(
     return jax.lax.stop_gradient(sol.params)
 
 
+@partial(jax.jit, static_argnames=("maxiter", "power_iters"))
+def solve_fista_nnls(
+    A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+    y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+    sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+    lambda_reg=1, maxiter=500, power_iters=50,
+):
+    """
+    Non-negative orbital weight estimation via FISTA with adaptive restart.
+
+    Solves the same problem as solve_qp_boxcdqp:
+        min_{w >= 0}  0.5 ||U w - b||^2 + 0.5 (lambda_reg / n_orb) ||w||^2
+
+    Never forms the n_orb x n_orb Gram matrix Q = U.T @ U.
+    Each iteration uses two O(m * n_orb) matvecs with U.
+
+    Three correctness fixes vs the original broken FISTA:
+      1. Extrapolated point z is projected onto the non-negative orthant.
+         Without this, z goes negative, the gradient at z is meaningless for
+         the constrained problem, and the iterates diverge.
+      2. Gradient restart (O'Donoghue & Candes 2015): momentum is reset when
+         grad(z) . (w_new - w) > 0, i.e. the gradient opposes the momentum.
+         Costs only one O(n) dot product — no extra matvec.
+      3. Lipschitz safety margin (×1.05) prevents step-size overestimation
+         from causing oscillations.
+    """
+    eps = 1e-8
+    y_xy_safe = jnp.where(jnp.abs(y_xy) > eps, y_xy, 1.0)
+
+    # Identical weighting/scaling as solve_qp_boxcdqp
+    w_rzphi = jnp.sqrt(5.0 / A_Rzphi.shape[0])
+    w_xy    = jnp.sqrt(5.0 / A_xy.shape[0])
+    w_h     = jnp.sqrt(1.0 / A_h1.shape[0])
+
+    U_rz  = w_rzphi * (A_Rzphi / (sig_Rzphi[:, None] + eps))
+    b_rz  = w_rzphi * (y_Rzphi / (sig_Rzphi + eps))
+
+    U_xy_ = w_xy * (A_xy / (sig_xy[:, None] + eps))
+    b_xy  = w_xy * (y_xy / (sig_xy + eps))
+
+    U_h1_ = w_h * ((A_h1 * A_xy) / y_xy_safe[:, None] / (sig_A1[:, None] + eps))
+    U_h2_ = w_h * ((A_h2 * A_xy) / y_xy_safe[:, None] / (sig_A2[:, None] + eps))
+    U_h3_ = w_h * ((A_h3 * A_xy) / y_xy_safe[:, None] / (sig_A3[:, None] + eps))
+    U_h4_ = w_h * ((A_h4 * A_xy) / y_xy_safe[:, None] / (sig_A4[:, None] + eps))
+    b_h1  = w_h * (y_h1 / (sig_A1 + eps))
+    b_h2  = w_h * (y_h2 / (sig_A2 + eps))
+    b_h3  = w_h * (y_h3 / (sig_A3 + eps))
+    b_h4  = w_h * (y_h4 / (sig_A4 + eps))
+
+    U = jnp.vstack([U_rz, U_xy_, U_h1_, U_h2_, U_h3_, U_h4_])
+    b = jnp.concatenate([b_rz, b_xy, b_h1, b_h2, b_h3, b_h4])
+
+    n_orb = U.shape[1]
+    reg   = jnp.array(lambda_reg, dtype=U.dtype) / n_orb
+
+    # ------------------------------------------------------------------
+    # Lipschitz constant L = max_eigenvalue(U.T @ U) + reg
+    # via power iteration, with 5% safety margin.
+    # ------------------------------------------------------------------
+    v0 = jnp.ones(n_orb, dtype=U.dtype) / jnp.sqrt(float(n_orb))
+
+    def power_step(v, _):
+        v = U.T @ (U @ v)
+        return v / (jnp.linalg.norm(v) + 1e-30), None
+
+    v_eig, _ = jax.lax.scan(power_step, v0, xs=None, length=power_iters)
+    Uv = U @ v_eig
+    L  = 1.05 * jnp.dot(Uv, Uv) / (jnp.dot(v_eig, v_eig) + 1e-30) + reg
+    lr = 1.0 / L
+
+    # Same initial guess as solve_qp_boxcdqp
+    w_init = jnp.ones(n_orb, dtype=U.dtype) * (jnp.sum(y_Rzphi) / n_orb)
+
+    # Precompute U.T @ b once (reused every iteration)
+    UTb = U.T @ b
+
+    # ------------------------------------------------------------------
+    # FISTA with gradient restart (O'Donoghue & Candes 2015).
+    #
+    # carry = (w, z, t)
+    #   w: current iterate (non-negative)
+    #   z: extrapolated point (also projected non-negative)
+    #   t: momentum scalar (reset to 1 on restart)
+    #
+    # Per iteration: 2 matvecs with U + O(n) restart check.
+    # ------------------------------------------------------------------
+    def fista_step(carry, _):
+        w, z, t = carry
+
+        # Gradient at z (z is already non-negative from projection)
+        Uz       = U @ z
+        grad     = U.T @ Uz - UTb + reg * z
+        w_new    = jnp.maximum(0.0, z - lr * grad)
+
+        # Gradient restart: reset momentum when the gradient at the
+        # extrapolated point opposes the step direction (w_new - w).
+        # This is the O'Donoghue & Candes criterion; costs only O(n).
+        restart  = jnp.dot(grad, w_new - w) > 0.0
+        t_eff    = jnp.where(restart, 1.0, t)
+
+        t_new    = 0.5 * (1.0 + jnp.sqrt(1.0 + 4.0 * t_eff * t_eff))
+        beta     = (t_eff - 1.0) / t_new
+
+        # Extrapolated point, projected onto non-negative orthant.
+        # This is the critical fix: without projection z can go very
+        # negative, making the gradient at z meaningless for the
+        # constrained problem and causing convergence to a wrong point.
+        z_new    = jnp.maximum(0.0, w_new + beta * (w_new - w))
+
+        return (w_new, z_new, t_new), None
+
+    (w_final, _, _), _ = jax.lax.scan(
+        fista_step,
+        (w_init, w_init, jnp.ones((), dtype=U.dtype)),
+        xs=None,
+        length=maxiter,
+    )
+    return jax.lax.stop_gradient(w_final)
+
+
+@partial(jax.jit, static_argnames=("maxiter",))
+def solve_nnls_admm(
+    A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+    y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+    sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+    lambda_reg=1, maxiter=200,
+):
+    """
+    Non-negative QP via ADMM (Alternating Direction Method of Multipliers).
+
+    Solves the same problem as solve_qp_boxcdqp:
+        min_{w >= 0}  0.5 w^T Q w + c^T w
+
+    Algorithm:
+      1. Form Q = U.T @ U + reg*I  (one GEMM)
+      2. Cholesky-factor  Q + rho*I  (done once)
+      3. ADMM loop (each step = one triangular solve + elementwise max):
+           w = cho_solve(L, rho*(z - u) - c)
+           z = max(0, w + u)
+           u = u + w - z
+
+    On GPU (T4), expected:
+      Q + Cholesky:  ~0.5-1s  (GEMM + Cholesky on 10000 x 10000)
+      200 iters:     ~0.5-1s  (triangular solves are O(n^2), parallelizable)
+      Total:         ~1-2s    vs ~15s for jaxopt.BoxCDQP
+    """
+    eps = 1e-8
+    y_xy_safe = jnp.where(jnp.abs(y_xy) > eps, y_xy, 1.0)
+
+    w_rzphi = jnp.sqrt(5.0 / A_Rzphi.shape[0])
+    w_xy    = jnp.sqrt(5.0 / A_xy.shape[0])
+    w_h     = jnp.sqrt(1.0 / A_h1.shape[0])
+
+    U_rz  = w_rzphi * (A_Rzphi / (sig_Rzphi[:, None] + eps))
+    y_rz  = w_rzphi * (y_Rzphi / (sig_Rzphi + eps))
+    U_xy_ = w_xy * (A_xy / (sig_xy[:, None] + eps))
+    y_xy_ = w_xy * (y_xy / (sig_xy + eps))
+    U_h1_ = w_h * ((A_h1 * A_xy) / y_xy_safe[:, None] / (sig_A1[:, None] + eps))
+    U_h2_ = w_h * ((A_h2 * A_xy) / y_xy_safe[:, None] / (sig_A2[:, None] + eps))
+    U_h3_ = w_h * ((A_h3 * A_xy) / y_xy_safe[:, None] / (sig_A3[:, None] + eps))
+    U_h4_ = w_h * ((A_h4 * A_xy) / y_xy_safe[:, None] / (sig_A4[:, None] + eps))
+    y_h1_ = w_h * (y_h1 / (sig_A1 + eps))
+    y_h2_ = w_h * (y_h2 / (sig_A2 + eps))
+    y_h3_ = w_h * (y_h3 / (sig_A3 + eps))
+    y_h4_ = w_h * (y_h4 / (sig_A4 + eps))
+
+    U = jnp.vstack([U_rz, U_xy_, U_h1_, U_h2_, U_h3_, U_h4_])
+    y = jnp.concatenate([y_rz, y_xy_, y_h1_, y_h2_, y_h3_, y_h4_])
+
+    n_orb = U.shape[1]
+    reg   = lambda_reg / n_orb
+
+    # Step 1: Form Q and c — identical to solve_qp_boxcdqp
+    Q = U.T @ U + reg * jnp.eye(n_orb, dtype=U.dtype)
+    c = -(U.T @ y)
+
+    # ADMM penalty parameter — standard heuristic: rho = trace(Q) / n
+    rho = jnp.trace(Q) / n_orb
+
+    # Step 2: Cholesky factorization of (Q + rho*I) — done once
+    L_chol = jnp.linalg.cholesky(Q + rho * jnp.eye(n_orb, dtype=U.dtype))
+
+    # Initial state
+    w_init = jnp.ones(n_orb, dtype=U.dtype) * (jnp.sum(y_Rzphi) / n_orb)
+    z_init = w_init.copy()
+    u_init = jnp.zeros(n_orb, dtype=U.dtype)
+
+    # Over-relaxation parameter (Boyd et al. 2011, Section 3.4.3)
+    # alpha in [1.5, 1.8] typically accelerates ADMM convergence.
+    alpha = 1.6
+
+    # Step 3: ADMM iterations with over-relaxation
+    def admm_step(carry, _):
+        w, z, u = carry
+        # w-update: solve (Q + rho*I) w = rho*(z - u) - c
+        rhs = rho * (z - u) - c
+        w_new = jax.scipy.linalg.cho_solve((L_chol, True), rhs)
+        # Over-relaxation: blend w_new toward z
+        w_hat = alpha * w_new + (1.0 - alpha) * z
+        # z-update: proximal operator for non-negativity
+        z_new = jnp.maximum(0.0, w_hat + u)
+        # u-update: dual variable
+        u_new = u + w_hat - z_new
+        return (w_new, z_new, u_new), None
+
+    (_, z_final, _), _ = jax.lax.scan(
+        admm_step,
+        (w_init, z_init, u_init),
+        xs=None,
+        length=maxiter,
+    )
+    # z is the non-negative solution
+    return jax.lax.stop_gradient(z_final)
+
 
 # @jax.jit
 @partial(jax.jit, static_argnames=('num_Vbin'))
@@ -548,11 +762,11 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     
     ############################## QP solver ###############################
 
-    weights = solve_qp_boxcdqp(
+    weights = solve_nnls_admm(
                             A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
                             y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
                             sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-                            lambda_reg=1, maxiter=100, tol=1e-1
+                            lambda_reg=1, maxiter=200,
     )
 
     #===================================== Calculate the net kinematics of the model =========================================
@@ -633,25 +847,28 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
         _z
     )
 
-    N_step_per_orb = 100
-    N_dynamical_time = 20
-    dt = T_orb / N_step_per_orb
-    time_integrate = T_orb * N_dynamical_time
-    N_steps = N_step_per_orb * N_dynamical_time
+    E_pot = jax.vmap(potential_func, in_axes=(0, 0, 0, None, None))(w0_new[:,0], w0_new[:,1], w0_new[:,2], dict_phi, params_halo_pot)
+    E_kin = 0.5 * (w0_new[:,3]**2 + w0_new[:,4]**2 + w0_new[:,5]**2)
+    E_J = E_pot + E_kin - Omega_bar * (w0_new[:,3] * w0_new[:,1] - w0_new[:,4] * w0_new[:,0])
+
+    w0_new = w0_new[jnp.argsort(E_J)]
+    w0_lowE = w0_new[:5000, :]
+    w0_highE = w0_new[5000:, :]
+    T_orb_lowE = T_orb[jnp.argsort(E_J)][:5000]
+    T_orb_highE = T_orb[jnp.argsort(E_J)][5000:]
+
     #=========================================== Integrate orbits =======================================================
     @jax.jit
     def acc_fn(x, y, z):
         a_halo = NFW_acceleration(x, y, z,  params_halo_pot)
         a_disk = get_acc(x, y, z, dict_phi)
         return a_halo + a_disk
+    
+    @jax.jit
+    def pot_fn(x, y, z):
+        return potential_func(x, y, z, dict_phi, params_halo_pot)
+    pot_fn = jax.vmap(pot_fn, in_axes=(0, 0, 0))
 
-    _integrate_vmap = jax.vmap(integrate_leapfrog_barred, 
-                        in_axes=(
-                                 0, None, None, 0, None, None, None, 
-                                 None, None, None, 
-                                 None, None, 
-                                 None, None, None, 
-                                 None, None, None))
 
     Rzphi_lim_grid = jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]])
     xy_lim_grid = jnp.array([[-12.,12.],[-4.,4.]])
@@ -659,25 +876,63 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     xy_n_grid = jnp.array([60,40])
     Rzphi_n_tot = 360
 
+    N_step_per_orb = 200
+    N_dynamical_time = 25
+    dt = T_orb_lowE / N_step_per_orb
+    time_integrate = T_orb_lowE * N_dynamical_time
+    N_steps = N_step_per_orb * N_dynamical_time
+
     time = time_integrate #Gyr
     n_steps = N_steps
     dt = dt
     unroll = False
     initial_time = 0.0
-    Rzphi_bin_counts, surface_density, h1, h2, h3, h4 = _integrate_vmap(
-                        w0_new, acc_fn, n_steps, dt, initial_time, -Omega_bar, unroll,
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, _ = _integrate_barred_vmap(
+                        w0_lowE, acc_fn, pot_fn, n_steps, dt, initial_time, -Omega_bar, unroll,
                         num_Vbin, bin_mapping, num_per_bin,
                         Rzphi_lim_grid, xy_lim_grid,
                         Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
                         v0, s, rotation_matrix)
-    A_Rzphi = Rzphi_bin_counts.T / n_steps
-    A_xy = surface_density.T / n_steps
-    A_h1 = h1.T
-    A_h2 = h2.T
-    A_h3 = h3.T
-    A_h4 = h4.T
+    A_Rzphi_1 = Rzphi_bin_counts.T / n_steps
+    A_xy_1 = surface_density.T / n_steps
+    A_h1_1 = h1.T
+    A_h2_1 = h2.T
+    A_h3_1 = h3.T
+    A_h4_1 = h4.T
 
-    #=========================================== Orbital weights optimisation ============================================
+
+    N_step_per_orb = 100
+    N_dynamical_time = 50
+    dt = T_orb_highE / N_step_per_orb
+    time_integrate = T_orb_highE * N_dynamical_time
+    N_steps = N_step_per_orb * N_dynamical_time
+
+    time = time_integrate #Gyr
+    n_steps = N_steps
+    dt = dt
+    unroll = False
+    initial_time = 0.0
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, _ = _integrate_barred_vmap(
+                        w0_highE, acc_fn, pot_fn, n_steps, dt, initial_time, -Omega_bar, unroll,
+                        num_Vbin, bin_mapping, num_per_bin,
+                        Rzphi_lim_grid, xy_lim_grid,
+                        Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
+                        v0, s, rotation_matrix)
+    A_Rzphi_2 = Rzphi_bin_counts.T / n_steps
+    A_xy_2 = surface_density.T / n_steps
+    A_h1_2 = h1.T
+    A_h2_2 = h2.T
+    A_h3_2 = h3.T
+    A_h4_2 = h4.T
+
+    A_Rzphi = jnp.concatenate([A_Rzphi_1, A_Rzphi_2], axis=1)
+    A_xy = jnp.concatenate([A_xy_1, A_xy_2], axis=1)
+    A_h1 = jnp.concatenate([A_h1_1, A_h1_2], axis=1)
+    A_h2 = jnp.concatenate([A_h2_1, A_h2_2], axis=1)
+    A_h3 = jnp.concatenate([A_h3_1, A_h3_2], axis=1)
+    A_h4 = jnp.concatenate([A_h4_1, A_h4_2], axis=1)
+
+    #================================== Preprocess the obtained matrices ============================================
 
     @jax.jit
     def density_func_Rz(R, z, phi, params):
@@ -728,26 +983,23 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     # A_Rzphi = A_Rzphi / mean_mass_per_orb
     sig_Rzphi = sig_Rzphi / mean_mass_per_orb
 
+    #=========================================== Orbital weights optimisation ===========================================
 
-    weights = solve_lbfgs_softplus(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
-                                    y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
-                                    sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-                                    l2=10, maxiter=1000)
-    # weights = solve_two_stage(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+    ############################## LBFGS solver ###############################
+    # weights = solve_lbfgs_softplus(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
     #                                 y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
     #                                 sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-    #                                 l2=1, maxiter=500)
-    # weights = solve_qp(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
-    #                                 y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
-    #                                 sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-    #                                 l2=1e-3, maxiter=500)
-    # weights = solve_fista(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
-    #                                 y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
-    #                                 sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-    #                                 l2=1e-3, maxiter=500)
+    #                                 l2=10, maxiter=1000)
+    
+    ############################## QP solver ###############################
 
-    # weights = jax.lax.stop_gradient(weights)
-
+    weights = solve_nnls_admm(
+                            A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+                            y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+                            sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+                            lambda_reg=1, maxiter=200,
+    )
+    ############################## Unit weights ###############################
     weights_unity = jnp.ones(A_Rzphi.shape[1], A_Rzphi.dtype) * (jnp.sum(y_Rzphi) / A_Rzphi.shape[1])
 
     #===================================== Calculate the net kinematics of the model =========================================
@@ -960,11 +1212,18 @@ def get_weights(A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
     s = dict_data['s']
 
     if solver == "nnls":
-        weights = solve_nonnegative_nonlinear_cg(
+        weights = solve_fista_nnls(
             A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
             y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
             sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-            l2=1.0, maxiter=solver_maxiter, method="polak-ribiere",
+            maxiter=solver_maxiter, power_iters=solver_power_iters,
+        )
+    elif solver == "admm":
+        weights = solve_nnls_admm(
+            A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+            y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+            sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+            maxiter=solver_maxiter,
         )
     elif solver == "qp":
         weights = solve_qp_boxcdqp(
