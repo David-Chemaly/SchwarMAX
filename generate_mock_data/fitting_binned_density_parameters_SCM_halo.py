@@ -89,7 +89,10 @@ if __name__ == "__main__":
     sample_mc_y = jax.scipy.special.ndtri(sample_mc[1:,1]) * 30
     sample_mc_z = jax.scipy.special.ndtri(sample_mc[1:,2]) * 30
 
-    posvel, mass = agama.readSnapshot(f'/data/hz420-2/SchwarMAX/SCM_disc/model/model_halo_final')
+    posvel, mass = agama.readSnapshot(f'/data/hz420-2/SchwarMAX/SCM_disc_bulge2/model/t_t0_1')
+    mask = (mass==np.unique(mass)[-1])
+    posvel = posvel[mask]
+    mass = mass[mask]
     R = np.sqrt(posvel[:,0]**2 + posvel[:,1]**2)
     z = posvel[:,2]
     r = np.sqrt(posvel[:,0]**2 + posvel[:,1]**2 + posvel[:,2]**2)
@@ -182,7 +185,7 @@ if __name__ == "__main__":
     sampler.run_mcmc(initial_pos, 500, progress=True)
     samples = sampler.get_chain(discard=200, flat=True)
     final_params = samples
-    pd.DataFrame(final_params, columns=['log10_M', 'log10_Rs']).to_csv('/data/hz420-2/SchwarMAX/SCM_disc/model/best_fit_params_binned_halo.csv', index=False)
+    pd.DataFrame(final_params, columns=['log10_M', 'log10_Rs']).to_csv('/data/hz420-2/SchwarMAX/SCM_disc_bulge2/model/best_fit_params_binned_halo.csv', index=False)
 
     # final_params = pd.read_csv('/data/hz420-2/SchwarMAX/SCM_disc/model/best_fit_params.csv').to_numpy()
 
@@ -194,7 +197,7 @@ if __name__ == "__main__":
                 show_titles=True, title_fmt='.2f', title_kwargs={"fontsize": 15},
                 smooth=True, quantiles=[0.16, 0.5, 0.84], fig=fig)
     ########################
-    fig.savefig('/data/hz420-2/SchwarMAX/SCM_disc/model/halo_posterior.png')
+    fig.savefig('/data/hz420-2/SchwarMAX/SCM_disc_bulge2/model/halo_posterior.png')
     ########################
 
     best_fit_param = np.percentile(samples_plot, 50, axis=0)

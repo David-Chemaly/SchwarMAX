@@ -202,24 +202,24 @@ def _xieta_to_Rz_jacobian(xi, eta, Rzminmax):
 def _Rz_rescale_forward(R, z, R0):
     """
     Forward map:
-        R̃ = ln(1 + R/R0)
-        z̃ = ln(1 + z/R0)
+        R̃ = asinh(R/R0)
+        z̃ = asinh(z/R0)
     Works with scalars or arrays.
     """
-    R_tilde = jnp.log1p(R / R0)
-    z_tilde = jnp.log1p(z / R0)
+    R_tilde = jnp.arcsinh(R / R0)
+    z_tilde = jnp.arcsinh(z / R0)
     return R_tilde, z_tilde
 
 @jax.jit
 def _Rz_rescale_inverse(R_tilde, z_tilde, R0):
     """
     Forward map:
-        R̃ = ln(1 + R/R0)
-        z̃ = ln(1 + z/R0)
+        R̃ = asinh(R/R0)
+        z̃ = asinh(z/R0)
     Works with scalars or arrays.
     """
-    R = R0 * jnp.expm1(R_tilde)
-    z = R0 * jnp.expm1(z_tilde)
+    R = R0 * jnp.sinh(R_tilde)
+    z = R0 * jnp.sinh(z_tilde)
     return R, z
 
 @jax.jit
@@ -399,6 +399,69 @@ def evaluate_phi_axisymmetric(x, y, z, dict_phi_m):
     return val_final
 
 
+@jax.jit
+def _evaluate_phi_and_scaled_derivs(x, y, z, dict_phi_m):
+    """
+    Evaluate potential and first derivatives in cylindrical variables.
+
+    Returns:
+        phi, dphi_dRscaled, dphi_dzscaled_abs, dphi_dphi, R, R0, z_abs
+    where derivatives are taken w.r.t. scaled coordinates:
+        Rscaled = asinh(R/R0), zscaled = asinh(|z|/R0)
+    """
+    R = jnp.sqrt(x*x + y*y)
+    ph = jnp.arctan2(y, x)
+    z_abs = jnp.abs(z)
+    R0 = dict_phi_m['R0'][0]
+
+    shape = R.shape
+    _R, _z = _Rz_rescale_forward(R, z_abs, R0)
+    pts = jnp.column_stack((_R.ravel(), _z.ravel()))
+
+    def evaluate_mode(m):
+        real_values = dict_phi_m['Phi_m_real'][m]
+        imag_values = dict_phi_m['Phi_m_img'][m]
+        M_x_real = dict_phi_m['Mx_real'][m]
+        M_y_real = dict_phi_m['My_real'][m]
+        M_x_imag = dict_phi_m['Mx_img'][m]
+        M_y_imag = dict_phi_m['My_img'][m]
+
+        real_part, dreal_dRsc, dreal_dzsc = cubic_spline_evaluate_with_derivs(
+            pts, (dict_phi_m['Rgrid'], dict_phi_m['Zgrid']),
+            real_values, M_x_real, M_y_real, fill_value=0.0)
+        imag_part, dimag_dRsc, dimag_dzsc = cubic_spline_evaluate_with_derivs(
+            pts, (dict_phi_m['Rgrid'], dict_phi_m['Zgrid']),
+            imag_values, M_x_imag, M_y_imag, fill_value=0.0)
+
+        real_part = real_part.reshape(shape)
+        imag_part = imag_part.reshape(shape)
+        dreal_dRsc = dreal_dRsc.reshape(shape)
+        dreal_dzsc = dreal_dzsc.reshape(shape)
+        dimag_dRsc = dimag_dRsc.reshape(shape)
+        dimag_dzsc = dimag_dzsc.reshape(shape)
+
+        cos_m = jnp.cos(m * ph)
+        sin_m = jnp.sin(m * ph)
+        factor = jnp.where(m == 0, 1.0, 2.0)
+
+        phi_m = factor * (real_part * cos_m - imag_part * sin_m)
+        dphi_dRsc_m = factor * (dreal_dRsc * cos_m - dimag_dRsc * sin_m)
+        dphi_dzsc_m = factor * (dreal_dzsc * cos_m - dimag_dzsc * sin_m)
+        dphi_dph_m = factor * (-m * real_part * sin_m - m * imag_part * cos_m)
+
+        return phi_m, dphi_dRsc_m, dphi_dzsc_m, dphi_dph_m
+
+    modes = dict_phi_m['m'].astype(int)
+    phi_m, dphi_dRsc_m, dphi_dzsc_m, dphi_dph_m = jax.vmap(evaluate_mode)(modes)
+
+    phi = jnp.sum(phi_m, axis=0)
+    dphi_dRsc = jnp.sum(dphi_dRsc_m, axis=0)
+    dphi_dzsc = jnp.sum(dphi_dzsc_m, axis=0)
+    dphi_dph = jnp.sum(dphi_dph_m, axis=0)
+
+    return phi, dphi_dRsc, dphi_dzsc, dphi_dph, R, R0, z_abs
+
+
 
 # @jax.jit
 # def get_acc(x, y, z, params):
@@ -409,31 +472,36 @@ def evaluate_phi_axisymmetric(x, y, z, dict_phi_m):
 
 @jax.jit
 def get_acc(x, y, z, params, eps=5e-4):
-    """Return acceleration = -∇phi using central finite differences."""
-    def phi(pos):
-        return evaluate_phi(pos[0], pos[1], pos[2], params)
+    """
+    Return acceleration = -∇phi from analytic derivatives of the spline expansion.
+    """
+    _, dphi_dRsc, dphi_dzsc, dphi_dph, R, R0, z_abs = _evaluate_phi_and_scaled_derivs(x, y, z, params)
 
-    # 6 nearby positions for central differences
-    base = jnp.array([x, y, z])
-    shifts = jnp.array([
-        [ eps, 0.0, 0.0],
-        [-eps, 0.0, 0.0],
-        [0.0,  eps, 0.0],
-        [0.0,-eps, 0.0],
-        [0.0, 0.0,  eps],
-        [0.0, 0.0,-eps],
-    ])
-    pts = base + shifts
+    # Chain rule from scaled coordinates used in interpolation:
+    # Rscaled = asinh(R/R0), zscaled = asinh(|z|/R0).
+    dRsc_dR = 1.0 / jnp.sqrt(R * R + R0 * R0)
+    dzsc_dzabs = 1.0 / jnp.sqrt(z_abs * z_abs + R0 * R0)
 
-    # compute phi at the 6 shifted points
-    phi_vals = jax.vmap(phi)(pts)
+    dphi_dR = dphi_dRsc * dRsc_dR
+    dphi_dz = dphi_dzsc * dzsc_dzabs * jnp.sign(z)
 
-    dphidx = (phi_vals[0] - phi_vals[1]) / (2 * eps)
-    dphidy = (phi_vals[2] - phi_vals[3]) / (2 * eps)
-    dphidz = (phi_vals[4] - phi_vals[5]) / (2 * eps)
+    tiny = 1e-12
+    invR = jnp.where(R > tiny, 1.0 / R, 0.0)
+    invR2 = invR * invR
 
-    acc = -jnp.array([dphidx, dphidy, dphidz])
-    return acc
+    dRdx = jnp.where(R > tiny, x * invR, 0.0)
+    dRdy = jnp.where(R > tiny, y * invR, 0.0)
+    dphidx = -y * invR2
+    dphidy = x * invR2
+
+    dphidx = jnp.where(R > tiny, dphidx, 0.0)
+    dphidy = jnp.where(R > tiny, dphidy, 0.0)
+
+    dphidx_total = dphi_dR * dRdx + dphi_dph * dphidx
+    dphidy_total = dphi_dR * dRdy + dphi_dph * dphidy
+    dphidz_total = dphi_dz
+
+    return -jnp.array([dphidx_total, dphidy_total, dphidz_total])
 
 @jax.jit
 def get_hessian(x, y, z, params):

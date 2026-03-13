@@ -196,3 +196,110 @@ def cubic_spline_evaluate(xi, grid, values, M_x, M_y, fill_value=jnp.nan):
     result = jnp.where(out_of_bounds, fill_value, result)
     
     return result.reshape(original_shape)
+
+
+@jax.jit
+def cubic_spline_evaluate_with_derivs(xi, grid, values, M_x, M_y, fill_value=jnp.nan):
+    """
+    Evaluate separable bicubic interpolation and its first derivatives.
+
+    Returns
+    -------
+    value : array
+    dvalue_dx : array
+    dvalue_dy : array
+    """
+    original_shape = xi.shape[:-1]
+    xi = xi.reshape(-1, 2)
+    n_points = len(xi)
+
+    x_pts = xi[:, 0]
+    y_pts = xi[:, 1]
+
+    out_of_bounds = jnp.zeros(n_points, dtype=bool)
+    out_of_bounds |= (x_pts < grid[0][0]) | (x_pts > grid[0][-1])
+    out_of_bounds |= (y_pts < grid[1][0]) | (y_pts > grid[1][-1])
+
+    x_pts = jnp.clip(x_pts, grid[0][0], grid[0][-1])
+    y_pts = jnp.clip(y_pts, grid[1][0], grid[1][-1])
+
+    i_x = jnp.searchsorted(grid[0], x_pts) - 1
+    i_x = jnp.clip(i_x, 0, len(grid[0]) - 2)
+    i_y = jnp.searchsorted(grid[1], y_pts) - 1
+    i_y = jnp.clip(i_y, 0, len(grid[1]) - 2)
+
+    h_x = grid[0][i_x + 1] - grid[0][i_x]
+    h_y = grid[1][i_y + 1] - grid[1][i_y]
+
+    t_x = (x_pts - grid[0][i_x]) / h_x
+    t_y = (y_pts - grid[1][i_y]) / h_y
+    one_minus_tx = 1.0 - t_x
+    one_minus_ty = 1.0 - t_y
+
+    z00 = values[i_x, i_y]
+    z10 = values[i_x + 1, i_y]
+    z01 = values[i_x, i_y + 1]
+    z11 = values[i_x + 1, i_y + 1]
+
+    Mx00 = M_x[i_x, i_y]
+    Mx10 = M_x[i_x + 1, i_y]
+    Mx01 = M_x[i_x, i_y + 1]
+    Mx11 = M_x[i_x + 1, i_y + 1]
+
+    f_x0 = (
+        one_minus_tx * z00 + t_x * z10
+        + ((one_minus_tx**3 - one_minus_tx) * Mx00 + (t_x**3 - t_x) * Mx10) * h_x**2 / 6.0
+    )
+    f_x1 = (
+        one_minus_tx * z01 + t_x * z11
+        + ((one_minus_tx**3 - one_minus_tx) * Mx01 + (t_x**3 - t_x) * Mx11) * h_x**2 / 6.0
+    )
+
+    # d f_x(.) / d t_x
+    df_x0_dtx = (
+        (z10 - z00)
+        + ((-3.0 * one_minus_tx**2 + 1.0) * Mx00 + (3.0 * t_x**2 - 1.0) * Mx10) * h_x**2 / 6.0
+    )
+    df_x1_dtx = (
+        (z11 - z01)
+        + ((-3.0 * one_minus_tx**2 + 1.0) * Mx01 + (3.0 * t_x**2 - 1.0) * Mx11) * h_x**2 / 6.0
+    )
+
+    My00 = M_y[i_x, i_y]
+    My10 = M_y[i_x + 1, i_y]
+    My01 = M_y[i_x, i_y + 1]
+    My11 = M_y[i_x + 1, i_y + 1]
+
+    My_x0 = one_minus_tx * My00 + t_x * My10
+    My_x1 = one_minus_tx * My01 + t_x * My11
+    dMy_x0_dtx = My10 - My00
+    dMy_x1_dtx = My11 - My01
+
+    value = (
+        one_minus_ty * f_x0 + t_y * f_x1
+        + ((one_minus_ty**3 - one_minus_ty) * My_x0 + (t_y**3 - t_y) * My_x1) * h_y**2 / 6.0
+    )
+
+    # d value / d t_x, then chain with d t_x / d x = 1 / h_x
+    dvalue_dtx = (
+        one_minus_ty * df_x0_dtx + t_y * df_x1_dtx
+        + ((one_minus_ty**3 - one_minus_ty) * dMy_x0_dtx + (t_y**3 - t_y) * dMy_x1_dtx) * h_y**2 / 6.0
+    )
+    dvalue_dx = dvalue_dtx / h_x
+
+    # d value / d t_y, then chain with d t_y / d y = 1 / h_y
+    dvalue_dty = (
+        (f_x1 - f_x0)
+        + ((-3.0 * one_minus_ty**2 + 1.0) * My_x0 + (3.0 * t_y**2 - 1.0) * My_x1) * h_y**2 / 6.0
+    )
+    dvalue_dy = dvalue_dty / h_y
+
+    value = jnp.where(out_of_bounds, fill_value, value)
+    dvalue_dx = jnp.where(out_of_bounds, 0.0, dvalue_dx)
+    dvalue_dy = jnp.where(out_of_bounds, 0.0, dvalue_dy)
+
+    return (
+        value.reshape(original_shape),
+        dvalue_dx.reshape(original_shape),
+        dvalue_dy.reshape(original_shape),
+    )

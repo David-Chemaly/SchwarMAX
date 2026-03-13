@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 from functools import partial
 
-from constants import G, EPSILON
+from constants import G, EPSILON, TWOPI
 
 @jax.jit
 def get_mat(x, y, z):
@@ -115,6 +115,100 @@ def makeRotationMatrix(alpha, beta, gamma):
     alpha, beta, gamma = jnp.radians(alpha), jnp.radians(beta), jnp.radians(gamma)
     return (Rz(gamma) @ Rx(beta) @ Rz(alpha)).T   # X = R @ x
 
+
+@partial(jax.jit, static_argnames=("potential_fn",))
+def estimate_orbital_timescale(R, potential_fn, potential_args=(), z=0.0, dR=1e-3):
+    """
+    Order-of-magnitude orbital timescale from a gravitational potential.
+
+    Uses a local circular-orbit estimate:
+        Omega^2(R) = (1 / R) * dPhi/dR
+        T_orb(R)   = 2*pi / Omega
+
+    Parameters
+    ----------
+    R : float or array-like
+        Cylindrical radius (kpc).
+    potential_fn : callable
+        Function with signature:
+            potential_fn(x, y, z, *potential_args) -> Phi
+        and Phi in units of kpc^2 / Gyr^2.
+    potential_args : tuple, optional
+        Extra arguments forwarded to potential_fn.
+    z : float, optional
+        Height where dPhi/dR is evaluated (default 0.0).
+    dR : float, optional
+        Finite-difference step in kpc.
+
+    Returns
+    -------
+    T_orb : float or jnp.ndarray
+        Estimated orbital timescale in Gyr.
+    """
+    R = jnp.asarray(R)
+    R_shape = R.shape
+    R_flat = jnp.ravel(R)
+    R_safe = jnp.maximum(jnp.abs(R_flat), 2 * dR)
+    min_val = 1e-20
+
+    def phi_of_R_scalar(r):
+        return potential_fn(r, 0.0, z, *potential_args)
+
+    def dphi_dr_scalar(r):
+        return (phi_of_R_scalar(r + dR) - phi_of_R_scalar(r - dR)) / (2.0 * dR)
+
+    dPhi_dR = jax.vmap(dphi_dr_scalar)(R_safe)
+    omega2 = jnp.maximum(jnp.abs(dPhi_dR) / R_safe, min_val)
+    omega = jnp.sqrt(omega2)
+
+    T_orb = 2 * jnp.pi / omega
+    return jnp.reshape(T_orb, R_shape)
+
+
+@partial(jax.jit, static_argnames=("potential_fn",))
+def get_rotation_curve(R, potential_fn, potential_args=(), z=0.0, dR=1e-3):
+    """
+    Circular speed curve for an axisymmetric potential.
+
+    Uses:
+        v_c^2(R, z) = R * dPhi/dR
+
+    Parameters
+    ----------
+    R : float or array-like
+        Cylindrical radius (kpc).
+    potential_fn : callable
+        Function with signature:
+            potential_fn(x, y, z, *potential_args) -> Phi
+        and Phi in units of kpc^2 / Gyr^2.
+    potential_args : tuple, optional
+        Extra arguments forwarded to potential_fn.
+    z : float, optional
+        Height where dPhi/dR is evaluated (default 0.0).
+    dR : float, optional
+        Finite-difference step in kpc.
+
+    Returns
+    -------
+    v_c : float or jnp.ndarray
+        Circular speed in kpc / Gyr, with the same shape as R.
+    """
+    R = jnp.asarray(R)
+    R_shape = R.shape
+    R_flat = jnp.ravel(R)
+    R_safe = jnp.maximum(jnp.abs(R_flat), 2 * dR)
+
+    def phi_of_R_scalar(r):
+        return potential_fn(r, 0.0, z, *potential_args)
+
+    def dphi_dr_scalar(r):
+        return (phi_of_R_scalar(r + dR) - phi_of_R_scalar(r - dR)) / (2.0 * dR)
+
+    dPhi_dR = jax.vmap(dphi_dr_scalar)(R_safe)
+    vc2 = jnp.maximum(R_safe * dPhi_dR, 0.0)
+    v_c = jnp.sqrt(vc2)
+    return jnp.reshape(v_c, R_shape)
+
 def halo_mass_from_stellar_mass(M_star,
     N=0.0351, log10_M1=11.59, beta=1.376, gamma=0.608,
     mmin=1e9, mmax=3e16, tol=1e-6, max_iter=200):
@@ -138,3 +232,71 @@ def halo_mass_from_stellar_mass(M_star,
 
     return 10**((jnp.log10(a)+jnp.log10(b))/2)
 
+
+
+def XexpX_pdf_log(x, a):
+    """
+    Probability density function of the distribution proportional to x * exp(-x/a).
+    
+    Parameters
+    ----------
+    x : array_like
+        Points at which to evaluate the PDF. Can be scalar or array.
+    a : float
+        Scale parameter > 0.
+    
+    Returns
+    -------
+    pdf : array_like
+        The PDF values at x.
+    """
+    # Ensure a > 0
+    a = jnp.asarray(a)
+    # PDF formula: (1/a^2) * x * exp(-x/a)
+    pdf = jnp.log(x) - jnp.log(a**2) - (x / a)
+    return jnp.where(x >= 0, pdf, -jnp.inf)
+
+def expX_pdf_log(x, a):
+    """
+    Probability density function of the distribution proportional to exp(-x/a).
+    
+    Parameters
+    ----------
+    x : array_like
+        Points at which to evaluate the PDF. Can be scalar or array.
+    a : float
+        Scale parameter > 0.
+    
+    Returns
+    -------
+    pdf : array_like
+        The PDF values at x.
+    """
+    # Ensure a > 0
+    a = jnp.asarray(a)
+    # PDF formula: (1/a^2) * x * exp(-x/a)
+    pdf = jnp.log(a) - (x / a)
+    return jnp.where(x >= 0, pdf, -jnp.inf)
+
+@partial(jax.jit,static_argnums=(2))
+def sample_from_logP(x_grid, logP, N, key):
+    """
+    Draw N samples from the distribution defined by logP on the grid x_grid
+    using the inverse‐CDF method.
+    """
+    # 1) Shift & exponentiate for numerical stability
+    logP = jnp.asarray(logP)
+    logP = logP - jnp.max(logP)
+    P = jnp.exp(logP)
+
+    # 2) Normalize to get a proper probability mass on the grid
+    P /= P.sum()
+
+    # 3) Build the CDF
+    cdf = jnp.cumsum(P)
+
+    # 4) Sample uniforms and invert the CDF via linear interpolation
+    # jax_random_key2 = jax.random.PRNGKey(random_seed)
+    u = jax.random.uniform(key, shape=(N,))
+    samples = jnp.interp(u, cdf, x_grid)
+    return samples

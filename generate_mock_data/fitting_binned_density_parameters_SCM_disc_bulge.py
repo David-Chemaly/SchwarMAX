@@ -26,38 +26,6 @@ from functools import partial
 def gaussian(x, mu, sigma):
     return 1/(sigma * np.sqrt(2 * np.pi)) * np.exp(-0.5 * ((x - mu) / sigma) ** 2)
 
-def _shift(x, y, z, p):
-    # Convert scalar params to arrays matching x,y,z shape
-    x0 = jnp.asarray(p["x_origin"])
-    y0 = jnp.asarray(p["y_origin"])
-    z0 = jnp.asarray(p["z_origin"])
-
-    # Broadcast to match shapes of inputs
-    x0 = jnp.broadcast_to(x0, x.shape)
-    y0 = jnp.broadcast_to(y0, y.shape)
-    z0 = jnp.broadcast_to(z0, z.shape)
-
-    # Stack as a 3-vector field
-    return jnp.stack([x - x0, y - y0, z - z0], axis=0)
-
-def _rotate(vec, p):
-    # vec: (3, ...)
-    R = get_mat(p["dirx"], p["diry"], p["dirz"])  # (3,3)
-    # Tensordot over axis: (i,a) * (a,...) -> (i,...)
-    return jnp.tensordot(R, vec, axes=[[1],[0]])
-
-@jax.jit
-def DoubleExponentialDisk_density(x, y, z, params):
-    """Volume density for a simple exponential disc: rho(R,z) = (rho0) e^{-R/Rd} e^{-|z|/hz}."""
-    # Shift and rotate coordinates
-    rin = _shift(x, y, z, params)       # (3, ...)
-    rvec = _rotate(rin, params)         # (3, ...)
-    rx, ry, rz = rvec + EPSILON
-
-    # Cylindrical R in rotated frame
-    R = jnp.sqrt(rx**2 + ry**2)
-
-    return (params['rho0']) * jnp.exp(-R / params['Rd']) * jnp.exp(-jnp.abs(rz) / params['hz'])
 
 def XexpX_pdf_log(x, a):
     """
@@ -114,14 +82,29 @@ if __name__ == "__main__":
     sample_mc_y = jax.scipy.special.ndtri(sample_mc[1:,1]) * 8
     sample_mc_z = jax.scipy.special.ndtri(sample_mc[1:,2]) * 3
 
-    posvel, mass = agama.readSnapshot(f'/data/hz420-2/SchwarMAX/SCM_disc/model/model_disc_final')
+    posvel, mass = agama.readSnapshot(f'/data/hz420-2/SchwarMAX/SCM_disc_bulge2/model/t_t0_1')
+    mask = (mass!=np.unique(mass)[-1])
+    posvel = posvel[mask]
+    mass = mass[mask]
+
+    posvel[:,0] = posvel[:,0] - np.mean(posvel[:,0])
+    posvel[:,1] = posvel[:,1] - np.mean(posvel[:,1])
+    posvel[:,2] = posvel[:,2] - np.mean(posvel[:,2])
+    posvel[:,3] = posvel[:,3] - np.mean(posvel[:,3])
+    posvel[:,4] = posvel[:,4] - np.mean(posvel[:,4])
+    posvel[:,5] = posvel[:,5] - np.mean(posvel[:,5])
+
     R = np.sqrt(posvel[:,0]**2 + posvel[:,1]**2)
     z = posvel[:,2]
+
+    phi_random = np.random.uniform(0, 2*np.pi, size=len(posvel))
+    posvel[:,0] = R * np.cos(phi_random)
+    posvel[:,1] = R * np.sin(phi_random)
 
     mass_factor = 1/((G*u.Msun).to(u.kpc*(u.km/u.s)**2))
     mass = mass * mass_factor.value
 
-    Rmax, zmax = 20, 5
+    Rmax, zmax = 20, 8
     xmax = Rmax / np.sqrt(2)
     mask = (R < Rmax) & (np.abs(z) < zmax)
     posvel = posvel[mask]
@@ -156,15 +139,15 @@ if __name__ == "__main__":
     density_err_grid = density_err_grid[mask]
     print(True in np.isnan(density_grid))
 
-    def density_func(x, y, z, params, Rmax = 15, zmax = 3):
+    def density_func(x, y, z, params_disc, params_bulge, Rmax = 15, zmax = 3):
 
         R = np.sqrt(x**2 + y**2)
 
-        val = DoubleExponentialDisk_density(x, y, z, params)
+        val = DoubleExponentialDisk_density(x, y, z, params_disc) + Hernquist_density(x, y, z, params_bulge)
         return np.where((R < Rmax) & (np.abs(z) < zmax), val, 0.0)
 
     def log_prior(theta,):
-        if -1 < theta[0] < 2 and -1 < theta[1] < 1 and 6 < theta[2] < 10:
+        if -1 < theta[0] < 2 and -1 < theta[1] < 1 and 7 < theta[2] < 11 and -1 < theta[3] < 1 and 8 < theta[4] < 12:
             return 0.0  # log(1) = 0 for uniform prior
         return -np.inf  # log(0) = -inf for out-of-bounds
     
@@ -177,10 +160,10 @@ if __name__ == "__main__":
         x,y,z = pos_grid[:,0], pos_grid[:,1], pos_grid[:,2]
         density_data = density_grid
 
-        params = {
-            'rho0': 10**theta[2],
-            'Rd': 10 ** theta[0],
-            'hz': 10 ** theta[1],
+        params_disc = {
+            'rho0_disc': 10**theta[2],
+            'Rd_disc': 10 ** theta[0],
+            'hz_disc': 10 ** theta[1],
             'x_origin':0.0,
             'y_origin':0.0,
             'z_origin':0.0,
@@ -188,7 +171,18 @@ if __name__ == "__main__":
             'diry':0.0,
             'dirz':1.0
         }
-        density_model = density_func(x,y,z, params, Rmax=Rmax, zmax=zmax)#
+        params_bulge = {
+            'logM_bulge': theta[4],
+            'Rs_bulge': 10 ** theta[3],
+            'x_origin':0.0,
+            'y_origin':0.0,
+            'z_origin':0.0,
+            'dirx':0.0,
+            'diry':0.0,
+            'dirz':1.0
+        }
+
+        density_model = density_func(x,y,z, params_disc, params_bulge, Rmax=Rmax, zmax=zmax)#
 
         # print('nan in density_model:', True in np.isnan(density_model))
 
@@ -201,31 +195,35 @@ if __name__ == "__main__":
         # print('nan in val:', val)
         return val
     
-    ndim = 3
+    ndim = 5
     nwalkers = 16  # must be >= 2 * ndim
-    p0 = np.array([0, 0, 8])
+    p0 = np.array([0, 0, 9, 0, 10])
     initial_pos = p0 + np.random.uniform(-0.5, 0.5, (nwalkers, ndim))
 
     sampler = emcee.EnsembleSampler(nwalkers, ndim, log_prob)
     sampler.run_mcmc(initial_pos, 500, progress=True)
     samples = sampler.get_chain(discard=200, flat=True)
     final_params = samples
-    pd.DataFrame(final_params, columns=['log10_Rd','log10_hz','log10_rho0']).to_csv('/data/hz420-2/SchwarMAX/SCM_disc/model/best_fit_params_binned_disc.csv', index=False)
+    pd.DataFrame(final_params, columns=['log10_Rd','log10_hz','log10_rho0','log10_Rs','log10_M']).to_csv('/data/hz420-2/SchwarMAX/SCM_disc_bulge2/model/best_fit_params_binned_stars.csv', index=False)
 
     # final_params = pd.read_csv('/data/hz420-2/SchwarMAX/SCM_disc/model/best_fit_params.csv').to_numpy()
 
-    fig, ax = plt.subplots(3, 3, figsize=(15, 15))
+    fig, ax = plt.subplots(5, 5, figsize=(25, 25))
     samples_plot = final_params
     samples_plot[:,0] = 10 ** samples_plot[:,0]
     samples_plot[:,1] = 10 ** samples_plot[:,1]
+    samples_plot[:,3] = 10 ** samples_plot[:,3]
 
-    corner.corner(samples_plot, labels=['R_d','h_z', 'log10 rho0'], 
+    corner.corner(samples_plot, labels=['R_d','h_z', 'log10 rho0', 'R_s', 'log10 M_bulge'], 
                 show_titles=True, title_fmt='.2f', title_kwargs={"fontsize": 15},
                 smooth=True, quantiles=[0.16, 0.5, 0.84], fig=fig)
+    ########################
+    fig.savefig('/data/hz420-2/SchwarMAX/SCM_disc_bulge2/model/disc_bulge_posterior.png')
+    ########################
 
     best_fit_param = np.percentile(samples_plot, 50, axis=0)
     print("Best-fit parameters:")
-    for i, name in enumerate(['R_d','h_z','log10_rho0']):
+    for i, name in enumerate(['R_d','h_z','log10_rho0','R_s','log10_M_bulge']):
         print(f"{name}: {best_fit_param[i]:.4f}")
  
     # Sample particles from the best-fit density distribution
@@ -234,23 +232,60 @@ if __name__ == "__main__":
     hz_best = best_fit_param[1]
     mass_best = 10**best_fit_param[2] * 4 * np.pi * Rd_best**2 * hz_best  # Total mass from best-fit parameters
     
-    n_samples = len(posvel)  # Same number as original data
+    n_samples_disc = int(len(posvel) * 0.8)  # Same number as original data
     
     # Sample R from exponential distribution
     # R_samples = np.random.exponential(scale=Rd_best, size=n_samples)
     x_grid = np.linspace(0, Rmax, 1000)
     logP_xexp = XexpX_pdf_log(x_grid, Rd_best)
     key = jax.random.PRNGKey(10086)
-    R_samples = sample_from_logP(x_grid, logP_xexp, n_samples, key)
-    phi_samples = np.random.uniform(0, 2*np.pi, size=n_samples)
-    z_samples_raw = np.random.exponential(scale=hz_best, size=n_samples)
-    z_samples = z_samples_raw * np.random.choice([-1, 1], size=n_samples)
+    R_samples = sample_from_logP(x_grid, logP_xexp, n_samples_disc, key)
+    phi_samples = np.random.uniform(0, 2*np.pi, size=n_samples_disc)
+    z_samples_raw = np.random.exponential(scale=hz_best, size=n_samples_disc)
+    z_samples = z_samples_raw * np.random.choice([-1, 1], size=n_samples_disc)
     x_samples = R_samples * np.cos(phi_samples)
     y_samples = R_samples * np.sin(phi_samples)
 
-    mass_per_particle = mass_best / n_samples
-    mass_samples = np.ones(n_samples) * mass_per_particle
-    sampled_particles = np.column_stack([x_samples, y_samples, z_samples])
+    mass_per_particle = mass_best / n_samples_disc
+    mass_samples_disc = np.ones(n_samples_disc) * mass_per_particle
+    sampled_particles_disc = np.column_stack([x_samples, y_samples, z_samples])
+
+    Rs_best = best_fit_param[3]
+    logM_best = best_fit_param[4]
+    best_bulge_param = {
+        'logM_bulge': logM_best,
+        'Rs_bulge': Rs_best,
+        'x_origin':0.0,
+        'y_origin':0.0,
+        'z_origin':0.0,
+        'dirx':0.0,
+        'diry':0.0,
+        'dirz':1.0
+    }
+    n_samples_bulge = int(len(posvel) * 0.2)
+    x_grid = np.linspace(0.01, 10, 1000)
+    y_grid = np.zeros_like(x_grid)
+    z_grid = np.zeros_like(x_grid)
+    logP_xexp = jnp.log(Hernquist_density(x_grid, y_grid, z_grid, best_bulge_param) * x_grid**2)  # Include Jacobian for spherical coordinates
+    key = jax.random.PRNGKey(10010)
+    r_samples = sample_from_logP(x_grid, logP_xexp, n_samples_bulge, key)
+    phi_samples = np.random.uniform(0, 2*np.pi, size=n_samples_bulge)
+    theta_samples = np.arccos(np.random.uniform(-1, 1, size=n_samples_bulge))
+    x_samples = r_samples * np.sin(theta_samples) * np.cos(phi_samples)
+    y_samples = r_samples * np.sin(theta_samples) * np.sin(phi_samples)
+    z_samples = r_samples * np.cos(theta_samples)
+
+    rmax = 4
+    mass_best = 10 ** best_fit_param[4] * (rmax **2 / (rmax + best_fit_param[3])**2)  # Total mass within rmax from best-fit parameters
+    print('best mass bulge x 10^10:', mass_best/1e10)
+    mass_per_particle = mass_best / n_samples_bulge
+    mass_samples_bulge = np.ones(n_samples_bulge) * mass_per_particle
+    sampled_particles_bulge = np.column_stack([x_samples, y_samples, z_samples])
+
+    mass_samples = np.concatenate([mass_samples_disc, mass_samples_bulge])
+    sampled_particles = np.vstack([sampled_particles_disc, sampled_particles_bulge])
+    R_samples = np.sqrt(sampled_particles[:,0]**2 + sampled_particles[:,1]**2)
+    z_samples = sampled_particles[:,2]
 
     fig, ax = plt.subplots(1,3, figsize=(18,4), gridspec_kw={'wspace':0.4})
 
@@ -261,7 +296,7 @@ if __name__ == "__main__":
     plt.colorbar(cb, ax=ax[0], label='Mass')
 
 
-    H_model, xegde, yedge = np.histogram2d(x_samples, y_samples, bins=100, range = [[-15,15],[-15,15]], weights=mass_samples)
+    H_model, xegde, yedge = np.histogram2d(sampled_particles[:,0], sampled_particles[:,1], bins=100, range = [[-15,15],[-15,15]], weights=mass_samples)
     cb = ax[1].imshow(H_model.T, origin='lower', extent=[xegde[0], xegde[-1], yedge[0], yedge[-1]], aspect='equal', norm = 'log')
     ax[1].set_xlabel('x')
     ax[1].set_ylabel('y')
@@ -283,7 +318,7 @@ if __name__ == "__main__":
     plt.colorbar(cb, ax=ax[0], label='Mass')
 
 
-    H_model, xegde, yedge = np.histogram2d(x_samples, z_samples, bins=100, range = [[-15,15],[-5,5]], weights=mass_samples)
+    H_model, xegde, yedge = np.histogram2d(sampled_particles[:,0], sampled_particles[:,2], bins=100, range = [[-15,15],[-5,5]], weights=mass_samples)
     cb = ax[1].imshow(H_model.T, origin='lower', extent=[xegde[0], xegde[-1], yedge[0], yedge[-1]], aspect='equal', norm = 'log')
     ax[1].set_xlabel('x')
     ax[1].set_ylabel('z')

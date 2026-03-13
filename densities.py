@@ -43,7 +43,7 @@ def DoubleExponentialDisk_density(x, y, z, params):
     # Cylindrical R in rotated frame
     R = jnp.sqrt(rx**2 + ry**2)
 
-    return (params['rho0']) * jnp.exp(-R / params['Rd']) * jnp.exp(-jnp.abs(rz) / params['hz'])
+    return (params['rho0_disc']) * jnp.exp(-R / params['Rd_disc']) * jnp.exp(-jnp.abs(rz) / params['hz_disc'])
 
 # ---------- Ferrers Bar ----------
 @jax.jit
@@ -68,6 +68,20 @@ def FerrersBar_density(x, y, z, params):
     rho = jnp.where(inside, params['rho0'] * (1.0 - m2) ** params['n'], 0.0)
     return rho
 
+@jax.jit
+def Ferrers_density(x, y, z, params):
+
+    '''
+    params include: 'logM_bar', 'Rs_bar', 'q_bar', 'p_bar'
+    '''
+    p, q, Rs = params['p_bar'], params['q_bar'], params['Rs_bar']
+    M = 10.0 ** params['logM_bar']
+    r = jnp.sqrt(x**2 + (y / p)**2 + (z / q)**2)
+    rho = 105 * M / (32 * jnp.pi * p * q * Rs**3) * (1 - (r / Rs)**2)**2
+    rho = jnp.where(r < Rs, rho, 0.0)
+    return rho
+
+
 # ---------- Double Exponential Disk x2 + Ferrers Bar  ----------
 @jax.jit
 def DoubleExponentialDiskx2FerrersBar_density(x, y, z, params):
@@ -77,9 +91,9 @@ def DoubleExponentialDiskx2FerrersBar_density(x, y, z, params):
     """
 
     thin_params = {
-        'Sigma0':     params['Sigma0_thin'],
-        'Rd':         params['Rd_thin'],
-        'hz':         params['hz_thin'],
+        'rho0_disc':     params['Sigma0_thin'],
+        'Rd_disc':         params['Rd_thin'],
+        'hz_disc':         params['hz_thin'],
         'x_origin':   params['x_origin_thin'],
         'y_origin':   params['y_origin_thin'],
         'z_origin':   params['z_origin_thin'],
@@ -90,9 +104,9 @@ def DoubleExponentialDiskx2FerrersBar_density(x, y, z, params):
     rho_thin  = DoubleExponentialDisk_density(x, y, z, thin_params)
 
     thick_params = thick_params = {
-        'Sigma0':     params['Sigma0_thick'],
-        'Rd':         params['Rd_thick'],
-        'hz':         params['hz_thick'],
+        'rho0_disc':     params['Sigma0_thick'],
+        'Rd_disc':         params['Rd_thick'],
+        'hz_disc':         params['hz_thick'],
         'x_origin':   params['x_origin_thick'],
         'y_origin':   params['y_origin_thick'],
         'z_origin':   params['z_origin_thick'],
@@ -141,6 +155,22 @@ def Hernquist_density(x, y, z, params):
     # Cylindrical R in rotated frame
     r = jnp.sqrt(rx**2 + ry**2 + rz**2)
 
-    val = 10 ** params['logM'] / (2*jnp.pi) * params['Rs'] / (r * (params['Rs'] + r)**3)
+    val = 10 ** params['logM_bulge'] / (2*jnp.pi) * params['Rs_bulge'] / (r * (params['Rs_bulge'] + r)**3) * jnp.exp(-(r / 4)**4)
+
+    return val
+
+
+@jax.jit
+def Dehnen_density(x, y, z, params):
+
+    '''
+    Dehnen profile: rho = (M / (4π p q Rs^3)) * (r/Rs)^(-n) * (1 + r/Rs)^(n-4), where n = 2
+    '''
+
+    p, q, Rs = params['p_bar'], params['q_bar'], params['Rs_bar']
+    M = 10.0 ** params['logM_bar']
+    r = jnp.sqrt(x**2 + (y / p)**2 + (z / q)**2) + EPSILON
+
+    val = M / (4 * jnp.pi * p * q * Rs**3) * (r / Rs)**(-2) * (1 + r / Rs)**(-2) * jnp.exp(-(z / 3)**4) * jnp.exp(-(r / 10)**4)
 
     return val

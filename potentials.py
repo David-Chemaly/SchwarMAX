@@ -116,6 +116,7 @@ def Bar_hessian(x, y, z, params):
     hess_phi = jax.hessian(potential_vec)(jnp.array([x, y, z]))
     return hess_phi
 
+@jax.jit
 def Hernquist_potential(x, y, z, params):
     '''
     params: dict with keys 'logM', 'Rs', 'x_origin', 'y_origin', 'z_origin', 'dirx', 'diry', 'dirz'

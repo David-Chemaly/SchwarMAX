@@ -57,7 +57,7 @@ def makeRotationMatrix(alpha, beta, gamma):
 # mass_data = data['mass']
 
 mass_unit = 1/((G*u.Msun).to(u.kpc*(u.km/u.s)**2))
-w0_data, mass_data = agama.readSnapshot(f'/data/hz420-2/SchwarMAX/SCM_disc_bulge2/model/t_t0_0')
+w0_data, mass_data = agama.readSnapshot(f'/data/hz420-2/SchwarMAX/SCM_disc_bulge2/model/t_t0_2')
 mass_data = mass_data * mass_unit.value
 
 mask = (mass_data!=np.unique(mass_data)[-1])
@@ -329,6 +329,7 @@ cb7 = ax1[0,3].scatter(df_XY_merged['X_grid'], df_XY_merged['Y_grid'], c= v0[df_
 fig1.colorbar(cb7, ax=ax1[0,3], label='v0')
 ax1[0,3].set_title('v0')
 
+fig1.savefig('/data/hz420-2/SchwarMAX/plots/mock_Nbody_disc_bulge_XY_withRot.png', bbox_inches='tight')
 
 for i in range (0,2):
     for j in range (0,4):
@@ -375,9 +376,63 @@ bin_dict = {
     's': np.array(s),
     'orientation': (alpha, beta, gamma)
 }
+bin_dict['V_mean_err'] = np.ones_like(bin_dict['V_mean']) * 5.
+bin_dict['V_sigma_err'] = np.ones_like(bin_dict['V_sigma']) * 5.
+bin_dict['h1_err'] = bin_dict['V_mean_err'] / (np.sqrt(2) * bin_dict['s'] + EPSILON)
+bin_dict['h2_err'] = bin_dict['V_sigma_err'] / (np.sqrt(2) * bin_dict['s'] + EPSILON)
+bin_dict['h3_err'] = np.ones_like(bin_dict['h3']) * 0.03 + bin_dict['h3'] * 0.01
+bin_dict['h4_err'] = np.ones_like(bin_dict['h4']) * 0.03 + bin_dict['h4'] * 0.01
+
+fig1,ax1 = plt.subplots(2,4,figsize=(30,7), gridspec_kw={'hspace':0.5, 'wspace':0.3})
+
+H, xedge, yedge = np.histogram2d(XY_stars[:, 0], XY_stars[:, 1], bins=[X_edge, Y_edge])
+signal = H.flatten()
+noise = np.sqrt(signal + 1)
+xmid, ymid = 0.5 * (xedge[1:] + xedge[:-1]), 0.5 * (yedge[1:] + yedge[:-1])
+fig1.suptitle('2D spatial and kinematic maps in Voronoi bins', fontsize=20, y = 1.03)
+cb1 = ax1[0,0].scatter(df_XY_merged['X_grid'], df_XY_merged['Y_grid'], c=bin_dict['surface_density'][df_XY_merged['Vbin_index'].to_numpy()], 
+                s = 20, cmap='viridis', marker = 's', norm = 'log')
+fig1.colorbar(cb1, ax=ax1[0,0], label=r'$\Sigma$ [M$_\odot$/pc$^2$]')
+ax1[0,0].set_title('Surface density')
+
+cb2 = ax1[0,1].scatter(df_XY_merged['X_grid'], df_XY_merged['Y_grid'], c=bin_dict['V_mean_err'][df_XY_merged['Vbin_index'].to_numpy()], 
+                s = 20, cmap='coolwarm', marker = 's', vmin = -200, vmax=200)
+fig1.colorbar(cb2, ax=ax1[0,1], label='<V> error [km/s]')
+ax1[0,1].set_title('Mean velocity error')
+
+cb3 = ax1[0,2].scatter(df_XY_merged['X_grid'], df_XY_merged['Y_grid'], c=bin_dict['V_sigma_err'][df_XY_merged['Vbin_index'].to_numpy()], 
+                s = 20, cmap='viridis', marker = 's')
+fig1.colorbar(cb3, ax=ax1[0,2], label='$\sigma_V$ error [km/s]')
+ax1[0,2].set_title('$\sigma_V$ error')
+
+cb4 = ax1[1,0].scatter(df_XY_merged['X_grid'], df_XY_merged['Y_grid'], c=bin_dict['h1_err'][df_XY_merged['Vbin_index'].to_numpy()],
+                s = 20, cmap='coolwarm', marker = 's')
+fig1.colorbar(cb4, ax=ax1[1,0], label='h1 error')
+ax1[1,0].set_title('h1 error')
+
+cb5 = ax1[1,1].scatter(df_XY_merged['X_grid'], df_XY_merged['Y_grid'], c=bin_dict['h2_err'][df_XY_merged['Vbin_index'].to_numpy()],
+                s = 20, cmap='coolwarm', marker = 's')
+fig1.colorbar(cb5, ax=ax1[1,1], label='h2 error')
+ax1[1,1].set_title('h2 error')
+
+cb6 = ax1[1,2].scatter(df_XY_merged['X_grid'], df_XY_merged['Y_grid'], c=bin_dict['h3_err'][df_XY_merged['Vbin_index'].to_numpy()],
+                s = 20, cmap='coolwarm', marker = 's')
+fig1.colorbar(cb6, ax=ax1[1,2], label='h3 error')
+ax1[1,2].set_title('h3 error')
+
+cb7 = ax1[1,3].scatter(df_XY_merged['X_grid'], df_XY_merged['Y_grid'], c=bin_dict['h4_err'][df_XY_merged['Vbin_index'].to_numpy()],
+                s = 20, cmap='coolwarm', marker = 's')
+fig1.colorbar(cb7, ax=ax1[1,3], label='h4 error')
+ax1[1,3].set_title('h4 error')
+
+
+cb7 = ax1[0,3].scatter(df_XY_merged['X_grid'], df_XY_merged['Y_grid'], c= bin_dict['s'][df_XY_merged['Vbin_index'].to_numpy()],
+                s = 20, cmap='coolwarm', marker = 's')
+fig1.colorbar(cb7, ax=ax1[0,3], label='s')
+ax1[0,3].set_title('s')
+
 
 with open(path + 'mock_Nbody_disc_bulge_XY_withRot.pkl', 'wb') as f:
     pickle.dump(bin_dict, f)
 
-fig1.savefig('/data/hz420-2/SchwarMAX/plots/mock_Nbody_disc_bulge_XY_withRot.png', bbox_inches='tight')
 plt.show()
