@@ -527,8 +527,13 @@ def solve_nnls_admm(
     # ADMM penalty parameter — standard heuristic: rho = trace(Q) / n
     rho = jnp.trace(Q) / n_orb
 
-    # Step 2: Cholesky factorization of (Q + rho*I) — done once
+    # Step 2: Precompute (Q + rho*I)^{-1} for fast GEMV in the ADMM loop.
+    # A GEMV (M_inv @ rhs) is much more GPU-parallelizable than the
+    # sequential triangular solves in cho_solve.
     L_chol = jnp.linalg.cholesky(Q + rho * jnp.eye(n_orb, dtype=U.dtype))
+    M_inv = jax.scipy.linalg.cho_solve(
+        (L_chol, True), jnp.eye(n_orb, dtype=U.dtype)
+    )
 
     # Initial state
     w_init = jnp.ones(n_orb, dtype=U.dtype) * (jnp.sum(y_Rzphi) / n_orb)
@@ -541,9 +546,9 @@ def solve_nnls_admm(
     # Step 3: ADMM iterations with over-relaxation
     def admm_step(carry, _):
         w, z, u = carry
-        # w-update: solve (Q + rho*I) w = rho*(z - u) - c
+        # w-update: GEMV instead of cho_solve (much faster on GPU)
         rhs = rho * (z - u) - c
-        w_new = jax.scipy.linalg.cho_solve((L_chol, True), rhs)
+        w_new = M_inv @ rhs
         # Over-relaxation: blend w_new toward z
         w_hat = alpha * w_new + (1.0 - alpha) * z
         # z-update: proximal operator for non-negativity
