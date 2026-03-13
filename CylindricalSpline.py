@@ -519,6 +519,123 @@ def get_acc(x, y, z, params, eps=5e-4):
     return -jnp.array([dphidx_total, dphidy_total, dphidz_total])
 
 @jax.jit
+def get_acc_fast(x, y, z, params):
+    """
+    Fast acceleration = -∇Φ from spline expansion.
+
+    Same result as get_acc but computes grid indices (searchsorted) ONCE
+    and reuses them across all Fourier modes and real/imag parts.
+    This eliminates 17 out of 18 redundant searchsorted calls.
+    """
+    R = jnp.sqrt(x * x + y * y)
+    ph = jnp.arctan2(y, x)
+    z_abs = jnp.abs(z)
+    R0 = params['R0'][0]
+
+    _R, _z = _Rz_rescale_forward(R, z_abs, R0)
+
+    # --- Grid lookup: done ONCE for all modes ---
+    Rgrid = params['Rgrid']
+    Zgrid = params['Zgrid']
+    i_x = jnp.searchsorted(Rgrid, _R) - 1
+    i_x = jnp.clip(i_x, 0, len(Rgrid) - 2)
+    i_y = jnp.searchsorted(Zgrid, _z) - 1
+    i_y = jnp.clip(i_y, 0, len(Zgrid) - 2)
+
+    h_x = Rgrid[i_x + 1] - Rgrid[i_x]
+    h_y = Zgrid[i_y + 1] - Zgrid[i_y]
+    t_x = (_R - Rgrid[i_x]) / h_x
+    t_y = (_z - Zgrid[i_y]) / h_y
+    omtx = 1.0 - t_x
+    omty = 1.0 - t_y
+
+    # Precompute cubic basis terms (reused for every coefficient set)
+    omtx3_omtx = omtx ** 3 - omtx
+    tx3_tx = t_x ** 3 - t_x
+    omty3_omty = omty ** 3 - omty
+    ty3_ty = t_y ** 3 - t_y
+    hx2_6 = h_x ** 2 / 6.0
+    hy2_6 = h_y ** 2 / 6.0
+    neg3omtx2_p1 = -3.0 * omtx ** 2 + 1.0
+    pos3tx2_m1 = 3.0 * t_x ** 2 - 1.0
+    neg3omty2_p1 = -3.0 * omty ** 2 + 1.0
+    pos3ty2_m1 = 3.0 * t_y ** 2 - 1.0
+
+    def _spline_val_and_derivs(values, Mx, My):
+        """Evaluate bicubic spline value + derivatives using precomputed grid info."""
+        z00 = values[i_x, i_y]
+        z10 = values[i_x + 1, i_y]
+        z01 = values[i_x, i_y + 1]
+        z11 = values[i_x + 1, i_y + 1]
+        Mx00 = Mx[i_x, i_y]
+        Mx10 = Mx[i_x + 1, i_y]
+        Mx01 = Mx[i_x, i_y + 1]
+        Mx11 = Mx[i_x + 1, i_y + 1]
+
+        f_x0 = omtx * z00 + t_x * z10 + (omtx3_omtx * Mx00 + tx3_tx * Mx10) * hx2_6
+        f_x1 = omtx * z01 + t_x * z11 + (omtx3_omtx * Mx01 + tx3_tx * Mx11) * hx2_6
+        df_x0_dtx = (z10 - z00) + (neg3omtx2_p1 * Mx00 + pos3tx2_m1 * Mx10) * hx2_6
+        df_x1_dtx = (z11 - z01) + (neg3omtx2_p1 * Mx01 + pos3tx2_m1 * Mx11) * hx2_6
+
+        My00 = My[i_x, i_y]
+        My10 = My[i_x + 1, i_y]
+        My01 = My[i_x, i_y + 1]
+        My11 = My[i_x + 1, i_y + 1]
+        My_x0 = omtx * My00 + t_x * My10
+        My_x1 = omtx * My01 + t_x * My11
+
+        val = omty * f_x0 + t_y * f_x1 + (omty3_omty * My_x0 + ty3_ty * My_x1) * hy2_6
+        dval_dtx = omty * df_x0_dtx + t_y * df_x1_dtx + (omty3_omty * (My10 - My00) + ty3_ty * (My11 - My01)) * hy2_6
+        dval_dty = (f_x1 - f_x0) + (neg3omty2_p1 * My_x0 + pos3ty2_m1 * My_x1) * hy2_6
+
+        return val, dval_dtx / h_x, dval_dty / h_y
+
+    # --- Evaluate all modes with shared grid indices ---
+    def evaluate_mode(m):
+        real_v, dreal_dR, dreal_dz = _spline_val_and_derivs(
+            params['Phi_m_real'][m], params['Mx_real'][m], params['My_real'][m])
+        imag_v, dimag_dR, dimag_dz = _spline_val_and_derivs(
+            params['Phi_m_img'][m], params['Mx_img'][m], params['My_img'][m])
+
+        cos_m = jnp.cos(m * ph)
+        sin_m = jnp.sin(m * ph)
+        factor = jnp.where(m == 0, 1.0, 2.0)
+
+        dphi_dRsc = factor * (dreal_dR * cos_m - dimag_dR * sin_m)
+        dphi_dzsc = factor * (dreal_dz * cos_m - dimag_dz * sin_m)
+        dphi_dph = factor * (-m * real_v * sin_m - m * imag_v * cos_m)
+        return dphi_dRsc, dphi_dzsc, dphi_dph
+
+    modes = params['m'].astype(int)
+    dphi_dRsc_m, dphi_dzsc_m, dphi_dph_m = jax.vmap(evaluate_mode)(modes)
+
+    dphi_dRsc = jnp.sum(dphi_dRsc_m, axis=0)
+    dphi_dzsc = jnp.sum(dphi_dzsc_m, axis=0)
+    dphi_dph = jnp.sum(dphi_dph_m, axis=0)
+
+    # --- Chain rule: scaled coords → Cartesian ---
+    dRsc_dR = 1.0 / jnp.sqrt(R * R + R0 * R0)
+    dzsc_dz = 1.0 / jnp.sqrt(z_abs * z_abs + R0 * R0)
+
+    dphi_dR = dphi_dRsc * dRsc_dR
+    dphi_dz = dphi_dzsc * dzsc_dz * jnp.sign(z)
+
+    tiny = 1e-12
+    invR = jnp.where(R > tiny, 1.0 / R, 0.0)
+    invR2 = invR * invR
+    dRdx = jnp.where(R > tiny, x * invR, 0.0)
+    dRdy = jnp.where(R > tiny, y * invR, 0.0)
+    dphidx = jnp.where(R > tiny, -y * invR2, 0.0)
+    dphidy = jnp.where(R > tiny, x * invR2, 0.0)
+
+    ax = dphi_dR * dRdx + dphi_dph * dphidx
+    ay = dphi_dR * dRdy + dphi_dph * dphidy
+    az = dphi_dz
+
+    return -jnp.array([ax, ay, az])
+
+
+@jax.jit
 def get_hessian(x, y, z, params):
     def potential_vec(pos):
         return evaluate_phi(pos[0], pos[1], pos[2], params)

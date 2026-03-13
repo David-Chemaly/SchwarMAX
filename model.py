@@ -31,7 +31,7 @@ from constants import EPSILON
 
 from densities import MiyamotoNagai_density, DoubleExponentialDisk_density, Hernquist_density, Dehnen_density
 
-from CylindricalSpline import get_phi_m, get_acc, evaluate_phi_axisymmetric
+from CylindricalSpline import get_phi_m, get_acc, get_acc_fast, evaluate_phi_axisymmetric
 
 path = '../SchwarMAX/'
 # path = '/content/drive/MyDrive/SchwarMAX/'
@@ -481,21 +481,18 @@ def solve_nnls_admm(
     lambda_reg=1, maxiter=200,
 ):
     """
-    Non-negative QP via ADMM with Woodbury-accelerated solves.
+    Non-negative QP via ADMM (Alternating Direction Method of Multipliers).
 
-    Solves:  min_{w >= 0}  0.5 w^T Q w + c^T w
-    where Q = U.T @ U + reg*I.
+    Solves the same problem as solve_qp_boxcdqp:
+        min_{w >= 0}  0.5 w^T Q w + c^T w
 
-    Uses the matrix inversion lemma (Woodbury identity) to avoid forming
-    the n×n Gram matrix Q entirely.  Since U is (m×n) with m < n, we work
-    with the m×m matrix S = σI_m + U U.T instead:
-
-        (U.T U + σI_n)^{-1} = σ^{-1}[I - V.T (V ·)]
-
-    where V = L_S^{-1} U and L_S = chol(S).
-
-    Each ADMM step becomes two GEMV operations (V@rhs, V.T@·) instead of
-    a triangular solve on the n×n system — significantly faster on GPU.
+    Algorithm:
+      1. Form Q = U.T @ U + reg*I  (one GEMM)
+      2. Cholesky-factor  Q + rho*I  (done once)
+      3. ADMM loop (each step = one triangular solve + elementwise max):
+           w = cho_solve(L, rho*(z - u) - c)
+           z = max(0, w + u)
+           u = u + w - z
     """
     eps = 1e-8
     y_xy_safe = jnp.where(jnp.abs(y_xy) > eps, y_xy, 1.0)
@@ -520,48 +517,36 @@ def solve_nnls_admm(
     U = jnp.vstack([U_rz, U_xy_, U_h1_, U_h2_, U_h3_, U_h4_])
     y = jnp.concatenate([y_rz, y_xy_, y_h1_, y_h2_, y_h3_, y_h4_])
 
-    n_orb = U.shape[1]  # n = 10000
-    m_obs = U.shape[0]  # m = ~3860
+    n_orb = U.shape[1]
     reg   = lambda_reg / n_orb
 
-    # --- Woodbury factorization ---
-    # We need (U.T U + σI_n)^{-1} where σ = reg + rho.
-    # rho = trace(U.T U + reg I) / n = (||U||_F^2 / n) + reg
-    U_fro_sq = jnp.sum(U * U)
-    rho = U_fro_sq / n_orb + reg
-    sigma = reg + rho  # = 2*reg + ||U||_F^2 / n_orb
-    inv_sigma = 1.0 / sigma
-
-    # c = -(U.T @ y)  (gradient of quadratic)
+    # Step 1: Form Q and c — identical to solve_qp_boxcdqp
+    Q = U.T @ U + reg * jnp.eye(n_orb, dtype=U.dtype)
     c = -(U.T @ y)
 
-    # Form S = σ I_m + U U.T  (m×m, much smaller than n×n)
-    S = sigma * jnp.eye(m_obs, dtype=U.dtype) + U @ U.T
+    # ADMM penalty parameter — standard heuristic: rho = trace(Q) / n
+    rho = jnp.trace(Q) / n_orb
 
-    # Cholesky of S (m×m instead of n×n)
-    L_S = jnp.linalg.cholesky(S)
-
-    # Precompute V = L_S^{-1} @ U  (m×n)
-    # Then (U.T U + σI)^{-1} rhs = inv_sigma * (rhs - V.T @ (V @ rhs))
-    V = jax.scipy.linalg.solve_triangular(L_S, U, lower=True)
+    # Step 2: Cholesky factorization of (Q + rho*I) — done once
+    L_chol = jnp.linalg.cholesky(Q + rho * jnp.eye(n_orb, dtype=U.dtype))
 
     # Initial state
     w_init = jnp.ones(n_orb, dtype=U.dtype) * (jnp.sum(y_Rzphi) / n_orb)
     z_init = w_init.copy()
     u_init = jnp.zeros(n_orb, dtype=U.dtype)
 
-    # Over-relaxation (Boyd et al. 2011, Section 3.4.3)
+    # Over-relaxation parameter (Boyd et al. 2011, Section 3.4.3)
     alpha = 1.6
 
-    # --- ADMM iterations with Woodbury solve ---
+    # Step 3: ADMM iterations with over-relaxation
     def admm_step(carry, _):
         w, z, u = carry
-        # w-update via Woodbury: w = (U.T U + σI)^{-1} rhs
+        # w-update: solve (Q + rho*I) w = rho*(z - u) - c
         rhs = rho * (z - u) - c
-        w_new = inv_sigma * (rhs - V.T @ (V @ rhs))
-        # Over-relaxation
+        w_new = jax.scipy.linalg.cho_solve((L_chol, True), rhs)
+        # Over-relaxation: blend w_new toward z
         w_hat = alpha * w_new + (1.0 - alpha) * z
-        # z-update: proximal for non-negativity
+        # z-update: proximal operator for non-negativity
         z_new = jnp.maximum(0.0, w_hat + u)
         # u-update: dual variable
         u_new = u + w_hat - z_new
@@ -573,6 +558,7 @@ def solve_nnls_admm(
         xs=None,
         length=maxiter,
     )
+    # z is the non-negative solution
     return jax.lax.stop_gradient(z_final)
 
 
@@ -638,7 +624,7 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     @jax.jit
     def acc_fn(x, y, z):
         a_halo = NFW_acceleration(x, y, z,  params_halo_pot)
-        a_disk = get_acc(x, y, z, dict_phi)
+        a_disk = get_acc_fast(x, y, z, dict_phi)
         return a_halo + a_disk
     
     @jax.jit
@@ -864,7 +850,7 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     @jax.jit
     def acc_fn(x, y, z):
         a_halo = NFW_acceleration(x, y, z,  params_halo_pot)
-        a_disk = get_acc(x, y, z, dict_phi)
+        a_disk = get_acc_fast(x, y, z, dict_phi)
         return a_halo + a_disk
 
     _integrate_vmap = jax.vmap(integrate_leapfrog_barred, 
@@ -1084,7 +1070,7 @@ def get_the_orbital_library(params_halo_pot, params_disk_rho, dict_data, num_Vbi
     @jax.jit
     def acc_fn(x, y, z):
         a_halo = NFW_acceleration(x, y, z,  params_halo_pot)
-        a_disk = get_acc(x, y, z, dict_phi)
+        a_disk = get_acc_fast(x, y, z, dict_phi)
         return a_halo + a_disk
 
     _integrate_vmap = jax.vmap(integrate_leapfrog_rot, 
