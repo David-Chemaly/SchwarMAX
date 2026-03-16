@@ -1073,48 +1073,48 @@ def integrate_adaptive_barred(
     def scan_body(carry, _):
         t, y, dt, k1 = carry
 
-        done = t >= T_total
-
-        # Clamp dt so we don't overshoot T_total
-        dt_use = jnp.minimum(dt, T_total - t)
-        dt_use = jnp.maximum(dt_use, dt_min)
+        # No early stopping — all N_max iterations do useful work.
+        # Orbits past T_total keep integrating; extra points improve
+        # the time-averaged density/kinematics at no extra cost.
 
         # ── Bogacki-Shampine RK2(3) stages ──
         # k1 is carried from previous step (FSAL)
-        k2 = _deriv_barred(y + 0.5 * dt_use * k1, acc_fn, Omega)          # stage 2
-        k3 = _deriv_barred(y + 0.75 * dt_use * k2, acc_fn, Omega)         # stage 3
-        y_new = y + dt_use * (2.0/9.0 * k1 + 1.0/3.0 * k2 + 4.0/9.0 * k3)  # 3rd order
-        k4 = _deriv_barred(y_new, acc_fn, Omega)                           # stage 4 (FSAL)
+        k2 = _deriv_barred(y + 0.5 * dt * k1, acc_fn, Omega)          # stage 2
+        k3 = _deriv_barred(y + 0.75 * dt * k2, acc_fn, Omega)         # stage 3
+        y_new = y + dt * (2.0/9.0 * k1 + 1.0/3.0 * k2 + 4.0/9.0 * k3)  # 3rd order
+        k4 = _deriv_barred(y_new, acc_fn, Omega)                       # stage 4 (FSAL)
 
         # ── Embedded error estimate ──
-        err_vec = dt_use * (e1 * k1 + e2 * k2 + e3 * k3 + e4 * k4)
+        err_vec = dt * (e1 * k1 + e2 * k2 + e3 * k3 + e4 * k4)
 
         # Per-component scaling (AGAMA-style)
         scale = atol + rtol * jnp.maximum(jnp.fabs(y), jnp.fabs(y_new))
         err_scaled = err_vec / scale
         err_norm = jnp.sqrt(jnp.mean(err_scaled**2))  # RMS norm
 
-        # Accept if err_norm <= 1 and not done
-        accept = (err_norm <= 1.0) & (~done)
+        # Accept if err_norm <= 1
+        accept = err_norm <= 1.0
 
         # Update state
         y_out = jnp.where(accept, y_new, y)
-        t_new = jnp.where(accept, t + dt_use, t)
+        t_new = jnp.where(accept, t + dt, t)
         # FSAL: if accepted, next k1 = k4; if rejected, keep old k1
         k1_new = jnp.where(accept, k4, k1)
 
         # Step size adjustment: dt_new = dt * safety * err^(-1/3) for 3rd order method
         scale_factor = safety * jnp.power(jnp.maximum(err_norm, 1e-10), -1.0/3.0)
         scale_factor = jnp.clip(scale_factor, 0.2, 5.0)
-        dt_new = dt_use * scale_factor
+        dt_new = dt * scale_factor
         dt_new = jnp.clip(dt_new, dt_min, dt_max)
 
         valid_flag = accept.astype(jnp.float32)
+        # Output dt_used for time-weighting (0 if rejected)
+        dt_out = jnp.where(accept, dt, 0.0)
 
-        return (t_new, y_out, dt_new, k1_new), (y_out, valid_flag)
+        return (t_new, y_out, dt_new, k1_new), (y_out, valid_flag, dt_out)
 
     init_carry = (0.0, w0, dt_init, k1_init)
-    (t_final, y_final, dt_final, _), (y_traj, valid_mask) = jax.lax.scan(
+    (t_final, y_final, dt_final, _), (y_traj, valid_mask, dt_traj) = jax.lax.scan(
         scan_body, init_carry, xs=None, length=N_max
     )
 
@@ -1123,12 +1123,21 @@ def integrate_adaptive_barred(
     # Orbit-level validity: check total E_J drift (same threshold as leapfrog)
     EJ_final = _compute_EJ(y_final, pot_fn, Omega)
     delta_EJ = jnp.fabs(EJ_final / EJ_0 - 1.0)
-    valid = jnp.where(delta_EJ < 0.5, 1.0, 0.0)
+    valid = jnp.where((delta_EJ < 0.1), 1.0, 0.0)# & (t_final > T_total / 3)
 
-    # ── Post-scan binning with validity masking ──
-    # y_traj shape: (N_max, 6)
-    # valid_mask shape: (N_max,)
+    # ── Apply 4-fold bar symmetry before binning ──
+    # Each orbit point generates 4 symmetric copies (triaxial bar symmetries).
+    # sign_sym shape: (4, 6); y_traj shape: (N_max, 6)
+    sign_sym = jnp.array([
+        [ 1,  1,  1,  1,  1,  1],   # identity
+        [ 1,  1, -1,  1,  1, -1],   # z-reflection
+        [-1, -1,  1, -1, -1,  1],   # xy point symmetry
+        [-1, -1, -1, -1, -1, -1],   # combined
+    ])
+    y_traj = (y_traj[None, :, :] * sign_sym[:, None, :]).reshape(-1, 6)  # (4*N_max, 6)
+    dt_traj = jnp.tile(dt_traj, 4)
 
+    # ── Post-scan binning with dt-weighting ──
     # Rzphi binning (pre-rotation frame)
     R_vals = jnp.sqrt(y_traj[:, 0]**2 + y_traj[:, 1]**2)
     phi_vals = jnp.arctan2(y_traj[:, 1], y_traj[:, 0])
@@ -1161,8 +1170,13 @@ def integrate_adaptive_barred(
 
     Vbin_indices = bin_mapping[XY_indices]
 
-    # Weighted segment sums using valid_mask
-    Rzphi_bin_counts = jax.ops.segment_sum(valid_mask.astype(jnp.int32),
+    # Normalize dt weights so each orbit contributes order unity.
+    # sum(dt_norm) = 1, so segment sums give fractional time in each bin.
+    T_integrated = jnp.sum(dt_traj) + EPSILON
+    dt_norm = dt_traj / T_integrated
+
+    # dt-normalized segment sums
+    Rzphi_bin_counts = jax.ops.segment_sum(dt_norm,
                                            Rzphi_indices,
                                            num_segments=num_segments_Rzphi)
 
@@ -1173,11 +1187,11 @@ def integrate_adaptive_barred(
     w = (vy - v0_cell) / s_cell
     eps = EPSILON
 
-    counts = jax.ops.segment_sum(valid_mask, Vbin_indices, num_segments=num_Vbin)
-    sum_w1 = jax.ops.segment_sum(valid_mask * w, Vbin_indices, num_segments=num_Vbin)
-    sum_w2 = jax.ops.segment_sum(valid_mask * w**2, Vbin_indices, num_segments=num_Vbin)
-    sum_w3 = jax.ops.segment_sum(valid_mask * w**3, Vbin_indices, num_segments=num_Vbin)
-    sum_w4 = jax.ops.segment_sum(valid_mask * w**4, Vbin_indices, num_segments=num_Vbin)
+    counts = jax.ops.segment_sum(dt_norm, Vbin_indices, num_segments=num_Vbin)
+    sum_w1 = jax.ops.segment_sum(dt_norm * w, Vbin_indices, num_segments=num_Vbin)
+    sum_w2 = jax.ops.segment_sum(dt_norm * w**2, Vbin_indices, num_segments=num_Vbin)
+    sum_w3 = jax.ops.segment_sum(dt_norm * w**3, Vbin_indices, num_segments=num_Vbin)
+    sum_w4 = jax.ops.segment_sum(dt_norm * w**4, Vbin_indices, num_segments=num_Vbin)
 
     norm = counts + eps
     w1 = sum_w1 / norm
@@ -1192,7 +1206,7 @@ def integrate_adaptive_barred(
     surface_density = counts / (num_per_bin * area_pixel + eps)
 
     # Zero out bad orbits
-    Rzphi_bin_counts = jnp.where(valid > 0.5, Rzphi_bin_counts.astype(jnp.float32), jnp.zeros_like(Rzphi_bin_counts, dtype=jnp.float32))
+    Rzphi_bin_counts = jnp.where(valid > 0.5, Rzphi_bin_counts, jnp.zeros_like(Rzphi_bin_counts))
     surface_density = jnp.where(valid > 0.5, surface_density, jnp.zeros_like(surface_density))
     h1 = jnp.where(valid > 0.5, h1, jnp.zeros_like(h1))
     h2 = jnp.where(valid > 0.5, h2, jnp.zeros_like(h2))
@@ -1237,10 +1251,10 @@ def integrate_adaptive_batch(w0, acc_fn, pot_fn, N_max, T_total,
         nRzphi, nXY, num_segments_Rzphi,
         v0, s, rotation_matrix)
 
-    # Normalize per-orbit: divide bin counts by n_accepted (instead of fixed n_steps)
-    n_acc = n_accepted[:, jnp.newaxis] + EPSILON
-    A_Rzphi = (Rzphi_bin_counts / n_acc).T
-    A_xy = (surface_density / n_acc).T
+    # Per-orbit normalization already done inside integrate_adaptive_barred
+    # (dt_norm = dt / sum(dt)), so bin counts are already fractional.
+    A_Rzphi = Rzphi_bin_counts.T
+    A_xy = surface_density.T
 
     A_h1 = h1.T
     A_h2 = h2.T
