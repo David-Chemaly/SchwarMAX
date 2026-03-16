@@ -43,13 +43,13 @@ def MiyamotoNagai_density(x, y, z, params):
     R = jnp.sqrt(rx**2 + ry**2)
 
     # Vertical scale height uses rz (IMPORTANT FIX)
-    beta = jnp.sqrt(rz**2 + params["Hs"]**2)
+    beta = jnp.sqrt(rz**2 + params["Hs_disc"]**2)
 
-    D2 = R*R + (params["Rs"] + beta)**2
-    num = params["Rs"] * R*R + (params["Rs"] + 3.0*beta) * (params["Rs"] + beta)**2
+    D2 = R*R + (params["Rs_disc"] + beta)**2
+    num = params["Rs_disc"] * R*R + (params["Rs_disc"] + 3.0*beta) * (params["Rs_disc"] + beta)**2
     den = beta**3 * D2**2.5
 
-    return (params["Hs"]**2 * 10.0**params["logM"] / (4 * jnp.pi)) * (num / den)
+    return (params["Hs_disc"]**2 * 10.0**params["logM_disc"] / (4 * jnp.pi)) * (num / den)
 
 # ---------- Double Exponential Disk ----------
 @jax.jit
@@ -194,3 +194,37 @@ def Dehnen_density(x, y, z, params):
     val = M / (4 * jnp.pi * p * q * Rs**3) * (r / Rs)**(-2) * (1 + r / Rs)**(-2) * jnp.exp(-(z / 3)**4) * jnp.exp(-(r / 10)**4)
 
     return val
+
+
+# ---------- Dehnen & Aly (2022) Disc-Bar ----------
+from dehnen_bar import DehnenBar_density as _db_density
+from dehnen_bar import T3_potential, T3_density, T3_acceleration 
+
+@jax.jit
+def DehnenAlyBar_density(x, y, z, params):
+    """
+    Dehnen & Aly (2022) disc-bar density.
+
+    params keys: 'logM_bar', 'Rs_bar', 'Hs_bar', 'L_bar', 'gamma_bar',
+                 'model_bar_idx', 'phi_bar',
+                 'x_origin', 'y_origin', 'z_origin', 'dirx', 'diry', 'dirz'
+    """
+    rin = _shift(x, y, z, params)
+    rvec = _rotate(rin, params)
+    rx, ry, rz = rvec
+    # bp = {
+    #     'M': 10.0 ** params['logM_bar'],
+    #     'a': params['Rs_bar'],
+    #     'b': params['Hs_bar'],
+    #     'L': params['L_bar'],
+    #     'gamma': params['gamma_bar'],
+    #     'mtype_idx': params['model_bar_idx'],
+    #     'phi': params['phi_bar'],
+    # }
+    M = 10.0 ** params['logM_bar']
+    a = params['Rs_bar']
+    b = params['Hs_bar']
+    L = params['L_bar']
+    gamma = params['gamma_bar']
+    return T3_density(rx, ry, rz, M, a, b, L, gamma)
+

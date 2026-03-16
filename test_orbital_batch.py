@@ -459,7 +459,7 @@ if __name__ == "__main__":
 
         return tN, wN 
 
-    N_step_per_orb = 200
+    N_step_per_orb = 100
     N_dynamical_time = 20
     dt = T_orb / N_step_per_orb
     time_integrate = T_orb * N_dynamical_time
@@ -506,35 +506,24 @@ if __name__ == "__main__":
     dt_batch = T_orb_batch / N_step_per_orb
     unroll = False
     initial_time = 0.0
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid = _integrate_batch_vmap(
+                        w0_new_batch, acc_fn, pot_fn, n_steps, dt_batch, initial_time, -Omega_bar, unroll,
+                        num_Vbin, bin_mapping, num_per_bin,
+                        Rzphi_lim_grid, xy_lim_grid,
+                        Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
+                        v0, s, rotation_matrix)
+    Rzphi_bin_counts.block_until_ready()
+    A_Rzphi_batch = Rzphi_bin_counts.T# / n_steps
+    A_xy_batch = surface_density.T# / n_steps
+    A_h1_batch = h1.T
+    A_h2_batch = h2.T
+    A_h3_batch = h3.T
+    A_h4_batch = h4.T
+    valid_batch = valid
+    time_end = time.time()
+    print(f"Time taken to integrate orbits and compute binned moments with vmap in batch: {time_end - time_start:.2f} seconds")
 
-    # Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid = _integrate_barred_vmap(
-    #                     w0_new, acc_fn, pot_fn, n_steps, dt, initial_time, -Omega_bar, unroll,
-    #                     num_Vbin, bin_mapping, num_per_bin,
-    #                     Rzphi_lim_grid, xy_lim_grid,
-    #                     Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
-    #                     v0, s, rotation_matrix)
-    # Rzphi_bin_counts.block_until_ready()
-    # A_Rzphi = Rzphi_bin_counts.T / n_steps
-    # A_xy = surface_density.T / n_steps
-    # A_h1 = h1.T
-    # A_h2 = h2.T
-    # A_h3 = h3.T
-    # A_h4 = h4.T
-
-    # Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid = _integrate_batch_vmap(
-    #                     w0_new_batch, acc_fn, pot_fn, n_steps, dt_batch, initial_time, -Omega_bar, unroll,
-    #                     num_Vbin, bin_mapping, num_per_bin,
-    #                     Rzphi_lim_grid, xy_lim_grid,
-    #                     Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
-    #                     v0, s, rotation_matrix)
-    # Rzphi_bin_counts.block_until_ready()
-    # A_Rzphi = Rzphi_bin_counts.T# / n_steps
-    # A_xy = surface_density.T #/ n_steps
-    # A_h1 = h1.T
-    # A_h2 = h2.T
-    # A_h3 = h3.T
-    # A_h4 = h4.T
-
+    time_start = time.time()
     w0_new_batch_flattened = w0_new_batch.reshape(-1, 6)
     dt_batch_flattened = dt_batch.reshape(-1)
     Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid_unbatch = _integrate_barred_vmap(
@@ -543,6 +532,7 @@ if __name__ == "__main__":
                         Rzphi_lim_grid, xy_lim_grid,
                         Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
                         v0, s, rotation_matrix)
+    
     Rzphi_bin_counts.block_until_ready()
     A_Rzphi_unbatch = Rzphi_bin_counts.T / n_steps
     A_xy_unbatch = surface_density.T / n_steps
@@ -550,169 +540,144 @@ if __name__ == "__main__":
     A_h2_unbatch = h2.T
     A_h3_unbatch = h3.T
     A_h4_unbatch = h4.T
-    A_h1_unbatch, A_h2_unbatch, A_h3_unbatch, A_h4_unbatch = A_h1_unbatch * A_xy_unbatch, A_h2_unbatch * A_xy_unbatch, A_h3_unbatch * A_xy_unbatch, A_h4_unbatch * A_xy_unbatch
-    A_Rzphi_reshape = A_Rzphi_unbatch.reshape(Rzphi_n_tot, n_realizations, n_particles)
-    A_xy_reshape = A_xy_unbatch.reshape(num_Vbin, n_realizations, n_particles)
-    A_h1_reshape = A_h1_unbatch.reshape(num_Vbin, n_realizations, n_particles)
-    A_h2_reshape = A_h2_unbatch.reshape(num_Vbin, n_realizations, n_particles)
-    A_h3_reshape = A_h3_unbatch.reshape(num_Vbin, n_realizations, n_particles)
-    A_h4_reshape = A_h4_unbatch.reshape(num_Vbin, n_realizations, n_particles)
-    norm = jnp.sum(valid_unbatch.reshape(n_particles, n_realizations), axis = 1) + 0.1
-    A_Rzphi = jnp.sum(A_Rzphi_reshape, axis = 1) / norm[jnp.newaxis, :]
-    A_xy = jnp.sum(A_xy_reshape, axis = 1) / norm[jnp.newaxis, :]
-    A_h1 = jnp.sum(A_h1_reshape, axis = 1) / norm[jnp.newaxis, :]
-    A_h2 = jnp.sum(A_h2_reshape, axis = 1) / norm[jnp.newaxis, :]
-    A_h3 = jnp.sum(A_h3_reshape, axis = 1) / norm[jnp.newaxis, :]
-    A_h4 = jnp.sum(A_h4_reshape, axis = 1) / norm[jnp.newaxis, :]
-    A_h1 = A_h1 / (A_xy + EPSILON)
-    A_h2 = A_h2 / (A_xy + EPSILON)
-    A_h3 = A_h3 / (A_xy + EPSILON)
-    A_h4 = A_h4 / (A_xy + EPSILON)
-    valid = norm
-    time_end = time.time()
-    print(f"Time taken to integrate orbits and compute observables: {time_end - time_start:.2f} seconds")
-    print(A_Rzphi.shape)
-    print(jnp.unique(valid, return_counts=True))
-    print(np.isnan(A_h1).sum(), np.isnan(A_h2).sum(), np.isnan(A_h3).sum(), np.isnan(A_h4).sum())
-    @jax.jit
-    def density_func_Rz(R, z, phi, params):
-        x = R * jnp.cos(phi)
-        y = R * jnp.sin(phi)
-        return density_func(x, y, z, params)
-    @partial(jax.jit, static_argnames=['rho_fct'])
-    def get_mass(R_grid, z_grid, phi_grid, rho_fct, dict_params, dR, dz, dphi, sample):
-        R_samples = R_grid + (sample[:,0] - 0.5) * dR
-        z_samples = z_grid + (sample[:,1] - 0.5) * dz
-        phi_samples = phi_grid + (sample[:,2] - 0.5) * dphi
-        density_samples = rho_fct(R_samples, z_samples, phi_samples, dict_params)
-        mass_tot = jnp.sum(density_samples * R_samples) / sample.shape[0]
-        return mass_tot
-    R_grid, dR = dict_data['R_grid'], dict_data['dR']
-    z_grid, dz = dict_data['z_grid'], dict_data['dz']
-    phi_grid, dphi = dict_data['phi_grid'], dict_data['dphi']
-    y_Rzphi = jax.vmap(get_mass, in_axes=[0, 0, 0, None, None, None, None, None, None])(
-                R_grid, z_grid, phi_grid, density_func_Rz, params_dict, dR, dz, dphi, dict_data['sample_for_integration']
+
+    #### Codex, below write a jax-jitted function that takes A_XXX_unbatched as input and rebatches it so that the results is the same as A_XXX_batch above
+    def rebatch_orbit_matrices(A_Rzphi_unbatch, A_xy_unbatch, A_h1_unbatch, A_h2_unbatch, A_h3_unbatch, A_h4_unbatch, valid_unbatch, n_orb_per_batch):
+        n_orb_tot = A_Rzphi_unbatch.shape[1]
+        n_batch = n_orb_tot // n_orb_per_batch
+        A_Rzphi_grouped = A_Rzphi_unbatch.reshape(A_Rzphi_unbatch.shape[0], n_batch, n_orb_per_batch)
+        A_xy_grouped = A_xy_unbatch.reshape(A_xy_unbatch.shape[0], n_batch, n_orb_per_batch)
+        A_h1_grouped = A_h1_unbatch.reshape(A_h1_unbatch.shape[0], n_batch, n_orb_per_batch)
+        A_h2_grouped = A_h2_unbatch.reshape(A_h2_unbatch.shape[0], n_batch, n_orb_per_batch)
+        A_h3_grouped = A_h3_unbatch.reshape(A_h3_unbatch.shape[0], n_batch, n_orb_per_batch)
+        A_h4_grouped = A_h4_unbatch.reshape(A_h4_unbatch.shape[0], n_batch, n_orb_per_batch)
+        valid_grouped = valid_unbatch.reshape(n_batch, n_orb_per_batch)
+
+        def _reduce_one_batch(A_Rzphi_one, A_xy_one, A_h1_one, A_h2_one, A_h3_one, A_h4_one, valid_one):
+            valid_sum = valid_one.sum()
+            weights = jnp.ones((A_Rzphi_one.shape[1],), dtype=A_Rzphi_one.dtype) / (valid_sum + 0.1)
+
+            A_h1w_one = A_h1_one * A_xy_one
+            A_h2w_one = A_h2_one * A_xy_one
+            A_h3w_one = A_h3_one * A_xy_one
+            A_h4w_one = A_h4_one * A_xy_one
+
+            A_Rzphi_batch = A_Rzphi_one @ weights
+            A_xy_batch = A_xy_one @ weights
+            A_h1_batch = (A_h1w_one @ weights) / (A_xy_batch + EPSILON)
+            A_h2_batch = (A_h2w_one @ weights) / (A_xy_batch + EPSILON)
+            A_h3_batch = (A_h3w_one @ weights) / (A_xy_batch + EPSILON)
+            A_h4_batch = (A_h4w_one @ weights) / (A_xy_batch + EPSILON)
+            return A_Rzphi_batch, A_xy_batch, A_h1_batch, A_h2_batch, A_h3_batch, A_h4_batch, valid_sum
+
+        A_Rzphi_batch_from_unbatch, A_xy_batch_from_unbatch, A_h1_batch_from_unbatch, A_h2_batch_from_unbatch, A_h3_batch_from_unbatch, A_h4_batch_from_unbatch, valid_batch_from_unbatch = jax.vmap(
+            _reduce_one_batch,
+            in_axes=(1, 1, 1, 1, 1, 1, 0),
+            out_axes=(1, 1, 1, 1, 1, 1, 0),
+        )(
+            A_Rzphi_grouped,
+            A_xy_grouped,
+            A_h1_grouped,
+            A_h2_grouped,
+            A_h3_grouped,
+            A_h4_grouped,
+            valid_grouped,
+        )
+
+        return (
+            A_Rzphi_batch_from_unbatch,
+            A_xy_batch_from_unbatch,
+            A_h1_batch_from_unbatch,
+            A_h2_batch_from_unbatch,
+            A_h3_batch_from_unbatch,
+            A_h4_batch_from_unbatch,
+            valid_batch_from_unbatch,
+        )
+
+    rebatch_orbit_matrices = jax.jit(rebatch_orbit_matrices, static_argnames=("n_orb_per_batch",))
+    A_Rzphi_rebatch, A_xy_rebatch, A_h1_rebatch, A_h2_rebatch, A_h3_rebatch, A_h4_rebatch, valid_rebatch = rebatch_orbit_matrices(
+            A_Rzphi_unbatch,
+            A_xy_unbatch,
+            A_h1_unbatch,
+            A_h2_unbatch,
+            A_h3_unbatch,
+            A_h4_unbatch,
+            valid_unbatch,
+            n_realizations,
     )
-    # y_Rzphi = dict_data['Rzphi_density_data'].astype(jnp.float32)
-    y_xy = dict_data['XY_density_data'].astype(jnp.float32)
-    y_h1 = dict_data['h1_data'].astype(jnp.float32)
-    y_h2 = dict_data['h2_data'].astype(jnp.float32)
-    y_h3 = dict_data['h3_data'].astype(jnp.float32)
-    y_h4 = dict_data['h4_data'].astype(jnp.float32)
-    y_xy = y_xy / params_dict['light_to_mass_ratio'] # convert from light to mass
-    sig_Rzphi = 0.02 * y_Rzphi + 1e-10
-    sig_xy = 0.01 * y_xy + 1e-10
-    # frac_err_min = 0.1
-    h_err_min = 0.03
-    sig_A1 = jnp.where(h_err_min > dict_data['h1_data_err'], h_err_min, dict_data['h1_data_err']) + EPSILON
-    sig_A2 = jnp.where(h_err_min > dict_data['h2_data_err'], h_err_min, dict_data['h2_data_err']) + EPSILON
-    sig_A3 = jnp.where(h_err_min > dict_data['h3_data_err'], h_err_min, dict_data['h3_data_err']) + EPSILON
-    sig_A4 = jnp.where(h_err_min > dict_data['h4_data_err'], h_err_min, dict_data['h4_data_err']) + EPSILON
 
-    mean_mass_per_orb = jnp.sum(y_Rzphi) / A_Rzphi.shape[1]
+    A_Rzphi_rebatch.block_until_ready()
+    time_end = time.time()
+    print(f"Time taken to integrate orbits in vmap and rebatch afterwards: {time_end - time_start:.2f} seconds")
 
-    y_xy = y_xy / mean_mass_per_orb
-    sig_xy = sig_xy / mean_mass_per_orb
-    y_Rzphi = y_Rzphi / mean_mass_per_orb
-    sig_Rzphi = sig_Rzphi / mean_mass_per_orb
+    print("The total difference between two methods")
+    def print_diff_stats(name, x0, x1):
+        diff = jnp.abs(x0 - x1)
+        print(f"{name}: sum={float(jnp.sum(diff)):.6e}, mean={float(jnp.mean(diff)):.6e}, max={float(jnp.max(diff)):.6e}")
 
-    path_data = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data/'
-    with open(path_data + 'orbital_library_bar_5.pkl', 'wb') as f:
-        orb_lib = (A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4, \
-           y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4, \
-           sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4)
-        pickle.dump(orb_lib, f)
+    print_diff_stats("A_Rzphi", A_Rzphi_batch, A_Rzphi_rebatch)
+    print_diff_stats("A_xy", A_xy_batch, A_xy_rebatch)
+    print_diff_stats("A_h1", A_h1_batch, A_h1_rebatch)
+    print_diff_stats("A_h2", A_h2_batch, A_h2_rebatch)
+    print_diff_stats("A_h3", A_h3_batch, A_h3_rebatch)
+    print_diff_stats("A_h4", A_h4_batch, A_h4_rebatch)
+    print_diff_stats("valid", valid_batch, valid_rebatch)
 
+    # extra diagnostic: test alternative flat->batch order assumptions for valid
+    valid_rebatch_contig = valid_unbatch.reshape(-1, n_realizations).sum(axis=1)
+    valid_rebatch_strided = valid_unbatch.reshape(n_realizations, -1).sum(axis=0)
+    print_diff_stats("valid_contig_check", valid_batch, valid_rebatch_contig)
+    print_diff_stats("valid_strided_check", valid_batch, valid_rebatch_strided)
 
-    weights = jnp.ones(A_Rzphi.shape[1])
-    A_h1, A_h2, A_h3, A_h4 = (A_h1 * A_xy), (A_h2 * A_xy), (A_h3 * A_xy), (A_h4 * A_xy)
-    density_2DXY = A_xy @ weights
-    h1_model = (A_h1 @ weights) / density_2DXY # density_2DXY
-    h2_model = (A_h2 @ weights) / density_2DXY # density_2DXY
-    h3_model = (A_h3 @ weights) / density_2DXY # density_2DXY
-    h4_model = (A_h4 @ weights) / density_2DXY # density_2DXY
+    mismatch_idx = jnp.where(valid_batch != valid_rebatch)[0]
+    if mismatch_idx.size > 0:
+        b = int(mismatch_idx[0])
+        print(f"first_valid_mismatch_batch={b}, valid_batch={float(valid_batch[b]):.1f}, valid_rebatch={float(valid_rebatch[b]):.1f}")
 
-    plot = True
-    if plot:
+        flat_slice = valid_unbatch[b * n_realizations : (b + 1) * n_realizations]
+        print(f"flat_slice_valid_sum={float(flat_slice.sum()):.1f}")
 
-        X_regular_grid = dict_data['X_regular_grid']
-        Y_regular_grid = dict_data['Y_regular_grid']
+        _, _, _, _, _, _, valid_single = _integrate_barred_vmap(
+            w0_new_batch[b], acc_fn, pot_fn, n_steps, dt_batch[b], initial_time, -Omega_bar, unroll,
+            num_Vbin, bin_mapping, num_per_bin,
+            Rzphi_lim_grid, xy_lim_grid,
+            Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
+            v0, s, rotation_matrix
+        )
+        print(f"single_batch_valid_sum={float(valid_single.sum()):.1f}")
+        print(f"single_vs_flat_orbit_valid_maxdiff={float(jnp.max(jnp.abs(valid_single - flat_slice))):.1f}")
 
-        bin_mapping = dict_data['bin_mapping']
-        index_remap = bin_mapping[:-1]
-        density_2DXY_weighted = density_2DXY[index_remap]
-        h1_model_weighted = h1_model[index_remap]
-        h2_model_weighted = h2_model[index_remap]
-        h3_model_weighted = h3_model[index_remap]
-        h4_model_weighted = h4_model[index_remap]
+        local_mismatch = jnp.where(valid_single != flat_slice)[0]
+        if local_mismatch.size > 0:
+            o = int(local_mismatch[0])
+            g = b * n_realizations + o
+            print(f"first_orbit_valid_mismatch: local={o}, global={g}, flat_valid={float(flat_slice[o]):.1f}, single_valid={float(valid_single[o]):.1f}")
 
-        density_mock = y_xy[index_remap]
-        h1_mock = y_h1[index_remap]
-        h2_mock = y_h2[index_remap]
-        h3_mock = y_h3[index_remap]
-        h4_mock = y_h4[index_remap]
+            _, _, _, _, _, _, valid_orbit_alone = integrate_leapfrog_barred(
+                w0_new_batch_flattened[g], acc_fn, pot_fn, n_steps, dt_batch_flattened[g], initial_time, -Omega_bar, unroll,
+                num_Vbin, bin_mapping, num_per_bin,
+                Rzphi_lim_grid, xy_lim_grid,
+                Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
+                v0, s, rotation_matrix
+            )
+            print(f"single_orbit_call_valid={float(valid_orbit_alone):.1f}")
 
-        fig, ax = plt.subplots(2, 3, figsize=(24, 10), gridspec_kw={'wspace': 0.5, 'hspace': 0.4,})
-        cb = ax[0,0].scatter(X_regular_grid, Y_regular_grid, c=density_2DXY_weighted.T, cmap='viridis', s = 20, marker='s', norm='log')
-        ax[0,0].set_title('Surface Density (Model)', fontsize=16)
-        ax[0,0].set_xlabel('X (kpc)', fontsize=14)
-        ax[0,0].set_ylabel('Y (kpc)', fontsize=14)
-        fig.colorbar(cb, ax=ax[0,0])
+            lo = max(0, g - 64)
+            hi = min(w0_new_batch_flattened.shape[0], g + 64)
+            _, _, _, _, _, _, valid_local_chunk = _integrate_barred_vmap(
+                w0_new_batch_flattened[lo:hi], acc_fn, pot_fn, n_steps, dt_batch_flattened[lo:hi], initial_time, -Omega_bar, unroll,
+                num_Vbin, bin_mapping, num_per_bin,
+                Rzphi_lim_grid, xy_lim_grid,
+                Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
+                v0, s, rotation_matrix
+            )
+            print(f"local_chunk_orbit_valid={float(valid_local_chunk[g-lo]):.1f}, chunk_size={hi-lo}")
 
-        im1 = ax[0,1].scatter(X_regular_grid, Y_regular_grid, c=h1_model_weighted.T, cmap='coolwarm', s = 20, marker='s')
-        ax[0,1].set_title('h1 (Model)', fontsize=16)
-        ax[0,1].set_xlabel('X (kpc)', fontsize=14)
-        ax[0,1].set_ylabel('Y (kpc)', fontsize=14)
-        fig.colorbar(im1, ax=ax[0,1])
-
-        im2 = ax[0,2].scatter(X_regular_grid, Y_regular_grid, c=h2_model_weighted.T, cmap='coolwarm', s = 20, marker='s')
-        ax[0,2].set_title('h2 (Model)', fontsize=16)
-        ax[0,2].set_xlabel('X (kpc)', fontsize=14)
-        ax[0,2].set_ylabel('Y (kpc)', fontsize=14)
-        fig.colorbar(im2, ax=ax[0,2])
-
-        im3 = ax[1,0].scatter(X_regular_grid, Y_regular_grid, c=h3_model_weighted.T, cmap='coolwarm', s = 20, marker='s')
-        ax[1,0].set_title('h3 (Model)', fontsize=16)
-        ax[1,0].set_xlabel('X (kpc)', fontsize=14)
-        ax[1,0].set_ylabel('Y (kpc)', fontsize=14)
-        fig.colorbar(im3, ax=ax[1,0])
-
-        im4 = ax[1,1].scatter(X_regular_grid, Y_regular_grid, c=h4_model_weighted.T, cmap='coolwarm', s = 20, marker='s')
-        ax[1,1].set_title('h4 (Model)', fontsize=16)
-        ax[1,1].set_xlabel('X (kpc)', fontsize=14)
-        ax[1,1].set_ylabel('Y (kpc)', fontsize=14)
-        fig.colorbar(im4, ax=ax[1,1])
-
-
-        fig, ax = plt.subplots(2, 3, figsize=(24, 10), gridspec_kw={'wspace': 0.5, 'hspace': 0.4,})
-        cb = ax[0,0].scatter(X_regular_grid, Y_regular_grid, c=density_mock.T, cmap='viridis', s = 20, marker='s', norm='log')
-        ax[0,0].set_title('Surface Density (Mock)', fontsize=16)
-        ax[0,0].set_xlabel('X (kpc)', fontsize=14)
-        ax[0,0].set_ylabel('Y (kpc)', fontsize=14)
-        fig.colorbar(cb, ax=ax[0,0])
-
-        im1 = ax[0,1].scatter(X_regular_grid, Y_regular_grid, c=h1_mock.T, cmap='coolwarm', s = 20, marker='s')
-        ax[0,1].set_title('h1 (Mock)', fontsize=16)
-        ax[0,1].set_xlabel('X (kpc)', fontsize=14)
-        ax[0,1].set_ylabel('Y (kpc)', fontsize=14)
-        fig.colorbar(im1, ax=ax[0,1])
-
-        im2 = ax[0,2].scatter(X_regular_grid, Y_regular_grid, c=h2_mock.T, cmap='coolwarm', s = 20, marker='s')
-        ax[0,2].set_title('h2 (Mock)', fontsize=16)
-        ax[0,2].set_xlabel('X (kpc)', fontsize=14)
-        ax[0,2].set_ylabel('Y (kpc)', fontsize=14)
-        fig.colorbar(im2, ax=ax[0,2])
-
-        im3 = ax[1,0].scatter(X_regular_grid, Y_regular_grid, c=h3_mock.T, cmap='coolwarm', s = 20, marker='s')
-        ax[1,0].set_title('h3 (Mock)', fontsize=16)
-        ax[1,0].set_xlabel('X (kpc)', fontsize=14)
-        ax[1,0].set_ylabel('Y (kpc)', fontsize=14)
-        fig.colorbar(im3, ax=ax[1,0])
-
-        im4 = ax[1,1].scatter(X_regular_grid, Y_regular_grid, c=h4_mock.T, cmap='coolwarm', s = 20, marker='s')
-        ax[1,1].set_title('h4 (Mock)', fontsize=16)
-        ax[1,1].set_xlabel('X (kpc)', fontsize=14)
-        ax[1,1].set_ylabel('Y (kpc)', fontsize=14)
-        fig.colorbar(im4, ax=ax[1,1])
-
-        plt.show()
+        _, _, _, _, _, _, valid_batch_singleton = _integrate_batch_vmap(
+            w0_new_batch[b:b+1], acc_fn, pot_fn, n_steps, dt_batch[b:b+1], initial_time, -Omega_bar, unroll,
+            num_Vbin, bin_mapping, num_per_bin,
+            Rzphi_lim_grid, xy_lim_grid,
+            Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
+            v0, s, rotation_matrix
+        )
+        print(f"batch_vmap_singleton_valid={float(valid_batch_singleton[0]):.1f}")
