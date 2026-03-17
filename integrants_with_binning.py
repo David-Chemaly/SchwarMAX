@@ -1123,7 +1123,7 @@ def integrate_adaptive_barred(
     # Orbit-level validity: check total E_J drift (same threshold as leapfrog)
     EJ_final = _compute_EJ(y_final, pot_fn, Omega)
     delta_EJ = jnp.fabs(EJ_final / EJ_0 - 1.0)
-    valid = jnp.where((delta_EJ < 0.1), 1.0, 0.0)# & (t_final > T_total / 3)
+    valid = jnp.where((delta_EJ < 0.1) & (t_final > T_total / 3), 1.0, 0.0)#
 
     # ── Apply 4-fold bar symmetry before binning ──
     # Each orbit point generates 4 symmetric copies (triaxial bar symmetries).
