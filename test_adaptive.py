@@ -248,7 +248,7 @@ n_steps = N_step_per_orb * N_dynamical_time
 # Adaptive parameters
 T_total_per_orbit = T_orb * N_dynamical_time
 dt_init_adaptive = dt_lf
-N_max = n_steps  # same budget
+N_max = 6000 #n_steps  # same budget
 
 print(f"\n{'='*70}")
 print(f"5000 particles, no realisations")
@@ -321,14 +321,14 @@ print(f"  Accepted steps: median={jnp.median(ad_n_accepted):.0f}, "
       f"min={ad_n_accepted.min():.0f}, max={ad_n_accepted.max():.0f}")
 
 # ══════════════════════════════════════════════════════════════
-# Test 3: Adaptive BS23 (rtol=1e-3, looser)
+# Test 3: Adaptive BS23 (rtol=1e-4, looser)
 # ══════════════════════════════════════════════════════════════
-print("\n── Adaptive BS23 rtol=1e-3 (5k orbits) ──")
+print("\n── Adaptive BS23 rtol=1e-4 (5k orbits) ──")
 print("  Warmup...")
 t0 = time.time()
 ad_result2 = _integrate_adaptive_vmap(
     w0_new, acc_fn, pot_fn, N_max, T_total_per_orbit,
-    dt_init_adaptive, -Omega_bar, 1e-6, 1e-3, 1e-5, 0.3,
+    dt_init_adaptive, -Omega_bar, 1e-6, 1e-4, 1e-5, 0.3,
     num_Vbin, bin_mapping, num_per_bin,
     Rzphi_lim, xy_lim, nRzphi, nXY, Rzphi_n_tot,
     v0, s, rotation_matrix)
@@ -340,7 +340,7 @@ print("  Timed run...")
 t0 = time.time()
 ad_result2 = _integrate_adaptive_vmap(
     w0_new, acc_fn, pot_fn, N_max, T_total_per_orbit,
-    dt_init_adaptive, -Omega_bar, 1e-6, 1e-3, 1e-5, 0.3,
+    dt_init_adaptive, -Omega_bar, 1e-6, 1e-4, 1e-5, 0.3,
     num_Vbin, bin_mapping, num_per_bin,
     Rzphi_lim, xy_lim, nRzphi, nXY, Rzphi_n_tot,
     v0, s, rotation_matrix)

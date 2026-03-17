@@ -661,7 +661,7 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     N_max = N_step_per_orb * N_dynamical_time
     T_total_batch = T_orb_batch * N_dynamical_time
     dt_init_batch = T_orb_batch / N_step_per_orb
-    atol, rtol = 1e-6, 1e-3
+    atol, rtol = 1e-7, 1e-4
     dt_min, dt_max = 1e-5, 0.3
 
     Rzphi_bin_counts, surface_density, h1, h2, h3, h4, _ = _integrate_adaptive_batch_vmap(
@@ -820,22 +820,35 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     _R = jnp.sqrt(w0_new[:,0]**2 + w0_new[:,1]**2)
     _z = w0_new[:,2]
 
-    T_orb = jax.vmap(estimate_orbital_timescale, in_axes=(0, None, None, 0))(
+    _Vc = jax.vmap(get_rotation_curve, in_axes=(0, None, None, 0))(
         _R,
         potential_func,
         (dict_phi, params_halo_pot),
         _z
     )
 
-    E_pot = jax.vmap(potential_func, in_axes=(0, 0, 0, None, None))(w0_new[:,0], w0_new[:,1], w0_new[:,2], dict_phi, params_halo_pot)
-    E_kin = 0.5 * (w0_new[:,3]**2 + w0_new[:,4]**2 + w0_new[:,5]**2)
-    E_J = E_pot + E_kin - Omega_bar * (w0_new[:,3] * w0_new[:,1] - w0_new[:,4] * w0_new[:,0])
+    n_realizations = 4
+    key = jax.random.PRNGKey(911)
+    keys = jax.random.split(key, 6)
+    d_scale = 0.1 * jnp.ones(_R.shape) # 0.1 kpc positional ditching
+    v_scale = 0.1 * _Vc # 10% velocity ditching
+    v_scale = jnp.clip(v_scale, a_min=1, a_max = 15) # limiting the noise with 1 - 15 kpc/Gyr
+    noise_x = (jax.random.uniform(keys[0], (n_particles, n_realizations,)) - 0.5) * d_scale[:, jnp.newaxis]
+    noise_y = (jax.random.uniform(keys[1], (n_particles, n_realizations,)) - 0.5) * d_scale[:, jnp.newaxis]
+    noise_z = (jax.random.uniform(keys[2], (n_particles, n_realizations,)) - 0.5) * d_scale[:, jnp.newaxis]
+    noise_vx = (jax.random.uniform(keys[3], (n_particles, n_realizations,)) - 0.5) * v_scale[:, jnp.newaxis]
+    noise_vy = (jax.random.uniform(keys[4], (n_particles, n_realizations,)) - 0.5) * v_scale[:, jnp.newaxis]
+    noise_vz = (jax.random.uniform(keys[5], (n_particles, n_realizations,)) - 0.5) * v_scale[:, jnp.newaxis]
 
-    w0_new = w0_new[jnp.argsort(E_J)]
-    w0_lowE = w0_new[:5000, :]
-    w0_highE = w0_new[5000:, :]
-    T_orb_lowE = T_orb[jnp.argsort(E_J)][:5000]
-    T_orb_highE = T_orb[jnp.argsort(E_J)][5000:]
+    w0_new_batch = w0_new[:, jnp.newaxis, :]
+    w0_new_batch = w0_new_batch + jnp.stack([noise_x, noise_y, noise_z, noise_vx, noise_vy, noise_vz], axis=-1)
+    T_orb = jax.vmap(estimate_orbital_timescale, in_axes=(0, None, None, 0))(
+        _R,
+        potential_func,
+        (dict_phi, params_halo_pot),
+        _z
+    )
+    T_orb_batch = T_orb[:, jnp.newaxis].repeat(n_realizations, axis=1)
 
     #=========================================== Integrate orbits =======================================================
     @jax.jit
@@ -843,12 +856,10 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
         a_halo = NFW_acceleration(x, y, z,  params_halo_pot)
         a_disk = get_acc(x, y, z, dict_phi)
         return a_halo + a_disk
-    
+
     @jax.jit
     def pot_fn(x, y, z):
         return potential_func(x, y, z, dict_phi, params_halo_pot)
-    pot_fn = jax.vmap(pot_fn, in_axes=(0, 0, 0))
-
 
     Rzphi_lim_grid = jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]])
     xy_lim_grid = jnp.array([[-12.,12.],[-4.,4.]])
@@ -856,61 +867,30 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     xy_n_grid = jnp.array([60,40])
     Rzphi_n_tot = 360
 
-    N_step_per_orb = 200
-    N_dynamical_time = 25
-    dt = T_orb_lowE / N_step_per_orb
-    time_integrate = T_orb_lowE * N_dynamical_time
-    N_steps = N_step_per_orb * N_dynamical_time
-
-    time = time_integrate #Gyr
-    n_steps = N_steps
-    dt = dt
-    unroll = False
-    initial_time = 0.0
-    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, _ = _integrate_barred_vmap(
-                        w0_lowE, acc_fn, pot_fn, n_steps, dt, initial_time, -Omega_bar, unroll,
-                        num_Vbin, bin_mapping, num_per_bin,
-                        Rzphi_lim_grid, xy_lim_grid,
-                        Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
-                        v0, s, rotation_matrix)
-    A_Rzphi_1 = Rzphi_bin_counts.T / n_steps
-    A_xy_1 = surface_density.T / n_steps
-    A_h1_1 = h1.T
-    A_h2_1 = h2.T
-    A_h3_1 = h3.T
-    A_h4_1 = h4.T
-
-
-    N_step_per_orb = 100
+    N_step_per_orb = 120
     N_dynamical_time = 50
-    dt = T_orb_highE / N_step_per_orb
-    time_integrate = T_orb_highE * N_dynamical_time
-    N_steps = N_step_per_orb * N_dynamical_time
+    N_max = N_step_per_orb * N_dynamical_time
+    T_total_batch = T_orb_batch * N_dynamical_time
+    dt_init_batch = T_orb_batch / N_step_per_orb
+    atol, rtol = 1e-6, 1e-4
+    dt_min, dt_max = 1e-5, 0.3
 
-    time = time_integrate #Gyr
-    n_steps = N_steps
-    dt = dt
-    unroll = False
-    initial_time = 0.0
-    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, _ = _integrate_barred_vmap(
-                        w0_highE, acc_fn, pot_fn, n_steps, dt, initial_time, -Omega_bar, unroll,
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, _ = _integrate_adaptive_batch_vmap(
+                        w0_new_batch, acc_fn, pot_fn, N_max, T_total_batch,
+                        dt_init_batch, -Omega_bar,
+                        atol, rtol,     # atol, rtol
+                        dt_min, dt_max,      # dt_min, dt_max
                         num_Vbin, bin_mapping, num_per_bin,
                         Rzphi_lim_grid, xy_lim_grid,
                         Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
                         v0, s, rotation_matrix)
-    A_Rzphi_2 = Rzphi_bin_counts.T / n_steps
-    A_xy_2 = surface_density.T / n_steps
-    A_h1_2 = h1.T
-    A_h2_2 = h2.T
-    A_h3_2 = h3.T
-    A_h4_2 = h4.T
-
-    A_Rzphi = jnp.concatenate([A_Rzphi_1, A_Rzphi_2], axis=1)
-    A_xy = jnp.concatenate([A_xy_1, A_xy_2], axis=1)
-    A_h1 = jnp.concatenate([A_h1_1, A_h1_2], axis=1)
-    A_h2 = jnp.concatenate([A_h2_1, A_h2_2], axis=1)
-    A_h3 = jnp.concatenate([A_h3_1, A_h3_2], axis=1)
-    A_h4 = jnp.concatenate([A_h4_1, A_h4_2], axis=1)
+    # Normalization already done per-orbit inside integrate_adaptive_barred
+    A_Rzphi = Rzphi_bin_counts.T
+    A_xy = surface_density.T
+    A_h1 = h1.T
+    A_h2 = h2.T
+    A_h3 = h3.T
+    A_h4 = h4.T
 
     #================================== Preprocess the obtained matrices ============================================
 
@@ -977,7 +957,7 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
                             A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
                             y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
                             sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-                            lambda_reg=1, maxiter=200,
+                            lambda_reg=0.1, maxiter=200,
     )
     ############################## Unit weights ###############################
     weights_unity = jnp.ones(A_Rzphi.shape[1], A_Rzphi.dtype) * (jnp.sum(y_Rzphi) / A_Rzphi.shape[1])
