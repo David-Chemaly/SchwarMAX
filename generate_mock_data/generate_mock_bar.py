@@ -111,6 +111,7 @@ mass_data = mass_data * mass_unit.value
 mask = (mass_data!=np.unique(mass_data)[-1])
 w0_data = w0_data[mask]
 mass_data = mass_data[mask]
+print(np.unique(mass_data, return_counts=True))
 
 R = np.sqrt(w0_data[:,0]**2 + w0_data[:,1]**2)
 mask = R < 5
@@ -162,8 +163,8 @@ Rzphi_stars = np.stack([R, z, phi], axis=-1)
 XY_stars = np.stack([x, z], axis=-1) # prefect edge-on view
 
 
-X_min, X_max = -12., 12.
-Y_min, Y_max = -4., 4.
+X_min, X_max = -10., 10.
+Y_min, Y_max = -3., 3.
 nX, nY = 60,40
 area_XY = ((X_max - X_min)/nX) * ((Y_max - Y_min)/nY)
 
@@ -200,8 +201,8 @@ XY_indices = assign_regular_grid(XY_stars,
                                 strides=XY_strdides)
 
 index = jnp.arange(num_segments_XY)
-counts = jax.ops.segment_sum(jnp.ones_like(vy), XY_indices, num_segments=num_segments_XY)
-signal = counts + 1
+counts = jax.ops.segment_sum(mass_data, XY_indices, num_segments=num_segments_XY)
+signal = counts / np.mean(mass_data) + 1
 noise = np.sqrt(signal + 1)
 
 df_XY_signal = pd.DataFrame({
