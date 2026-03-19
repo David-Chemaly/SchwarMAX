@@ -1123,7 +1123,7 @@ def integrate_adaptive_barred(
     # Orbit-level validity: check total E_J drift (same threshold as leapfrog)
     EJ_final = _compute_EJ(y_final, pot_fn, Omega)
     delta_EJ = jnp.fabs(EJ_final / EJ_0 - 1.0)
-    valid = jnp.where((delta_EJ < 0.1) & (t_final > T_total / 4), 1.0, 0.0)#
+    valid = jnp.where((delta_EJ < 0.1) & (t_final > T_total / 10), 1.0, 0.0)#
 
     # ── Apply 4-fold bar symmetry before binning ──
     # Each orbit point generates 4 symmetric copies (triaxial bar symmetries).
@@ -1213,7 +1213,7 @@ def integrate_adaptive_barred(
     h3 = jnp.where(valid > 0.5, h3, jnp.zeros_like(h3))
     h4 = jnp.where(valid > 0.5, h4, jnp.zeros_like(h4))
 
-    return Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid, n_accepted
+    return Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid, n_accepted, T_integrated
 
 
 _integrate_adaptive_vmap = jax.vmap(integrate_adaptive_barred,
@@ -1243,7 +1243,7 @@ def integrate_adaptive_batch(w0, acc_fn, pot_fn, N_max, T_total,
                              rotation_matrix=jnp.eye(3)):
     """Batch adaptive integration over multiple orbits, analogous to integrate_batch."""
 
-    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid, n_accepted = _integrate_adaptive_vmap(
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid, n_accepted, T_integrated = _integrate_adaptive_vmap(
         w0, acc_fn, pot_fn, N_max, T_total,
         dt_init, Omega, atol, rtol, dt_min, dt_max,
         num_Vbin, bin_mapping, num_per_bin,

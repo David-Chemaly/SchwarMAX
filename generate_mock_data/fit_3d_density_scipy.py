@@ -45,6 +45,22 @@ def bar_angle_bar_strength(x, y, R_anulus=np.arange(1, 5, 0.25)):
     return R_mid, np.array(bar_angles0), np.array(bar_strength0)
 
 
+def compute_data_A2(posvel, mass, R_all, R_edges):
+    """Compute A2/A0 from N-body particles in radial annuli."""
+    R_mid = 0.5 * (R_edges[:-1] + R_edges[1:])
+    phi_all = np.arctan2(posvel[:, 1], posvel[:, 0])
+    A2 = np.zeros(len(R_mid))
+    for j in range(len(R_mid)):
+        sel = (R_all > R_edges[j]) & (R_all < R_edges[j + 1])
+        m_sel, phi_sel = mass[sel], phi_all[sel]
+        if len(m_sel) == 0:
+            continue
+        A0 = np.sum(m_sel)
+        A2[j] = np.sqrt(np.sum(m_sel * np.cos(2 * phi_sel))**2 +
+                         np.sum(m_sel * np.sin(2 * phi_sel))**2) / A0
+    return R_mid, A2
+
+
 def rotate(posvel, angle):
     x, y, z, vx, vy, vz = posvel.T
     s, c = np.sin(angle), np.cos(angle)
@@ -73,15 +89,31 @@ def density_model(x, y, z, params):
 # Chi-squared objective (JAX-jitted)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def make_chi2_fn(x, y, z, density_data, density_err):
-    """Return a JAX-jitted chi2 function closed over the data."""
+def make_chi2_fn(x, y, z, density_data, density_err,
+                 A2_data, A2_eval_coords, A2_shape, A2_dz, A2_phi,
+                 lambda_A2=0.1):
+    """
+    Return (chi2_fn, chi2_and_grad_fn) closed over the data.
+
+    The objective is:  chi2_density + lambda_A2 * A2_weight * chi2_A2
+
+    A2 is computed only for R < 5 kpc (bar region).
+    """
     x, y, z = jnp.asarray(x), jnp.asarray(y), jnp.asarray(z)
     density_data = jnp.asarray(density_data)
     density_err = jnp.asarray(density_err)
+    A2_data_j = jnp.asarray(A2_data)
+    x_a2, y_a2, z_a2 = (jnp.asarray(c) for c in A2_eval_coords)
+    A2_phi_j = jnp.asarray(A2_phi)
+    n_R, n_phi, n_z = A2_shape
+
+    # Scale factor so A2 penalty is comparable to density chi2
+    ndof = len(density_data)
+    A2_weight = ndof / n_R
 
     @jax.jit
-    def chi2(theta):
-        params = {
+    def _theta_to_params(theta):
+        return {
             'rho0_disc': 10.0 ** theta[2],
             'Rd_disc':   10.0 ** theta[0],
             'hz_disc':   10.0 ** theta[1],
@@ -92,9 +124,34 @@ def make_chi2_fn(x, y, z, density_data, density_err):
             'x_origin': 0.0, 'y_origin': 0.0, 'z_origin': 0.0,
             'dirx': 0.0, 'diry': 0.0, 'dirz': 1.0,
         }
+
+    @jax.jit
+    def chi2(theta):
+        params = _theta_to_params(theta)
+
+        # --- density chi2 ---
         model = density_model(x, y, z, params)
         residual = (model - density_data) / (density_err + 1e-12)
-        return jnp.sum(residual**2)
+        chi2_dens = jnp.sum(residual**2)
+
+        # --- A2 chi2 ---
+        rho_a2 = density_model(x_a2, y_a2, z_a2, params)
+        rho_a2 = rho_a2.reshape(n_R, n_phi, n_z)
+
+        # Integrate over z -> Sigma(R, phi)
+        Sigma = jnp.sum(rho_a2, axis=2) * A2_dz  # (n_R, n_phi)
+
+        # Fourier decomposition per radial bin
+        a0 = jnp.mean(Sigma, axis=1)  # (n_R,)
+        a2_cos = jnp.mean(Sigma * jnp.cos(2 * A2_phi_j[None, :]), axis=1)
+        a2_sin = jnp.mean(Sigma * jnp.sin(2 * A2_phi_j[None, :]), axis=1)
+        A2_model = jnp.sqrt(a2_cos**2 + a2_sin**2) / (a0 + 1e-30)
+
+        # Weighted squared difference
+        A2_err = jnp.maximum(A2_data_j * 0.1, 0.01)  # 10% relative error floor
+        chi2_a2 = jnp.sum(((A2_model - A2_data_j) / A2_err)**2)
+
+        return chi2_dens + lambda_A2 * A2_weight * chi2_a2
 
     chi2_and_grad = jax.jit(jax.value_and_grad(chi2))
     return chi2, chi2_and_grad
@@ -181,10 +238,30 @@ if __name__ == "__main__":
     ndof = len(dens_flat) - 7
     print(f"Non-empty cells: {len(dens_flat)}, ndof: {ndof}")
 
+    # ---------- 2b. Compute data A2(R) for R < 5 kpc and build evaluation grid ----------
+    A2_R_edges = np.arange(0.25, 5.0, 0.25)  # R < 5 kpc only (bar region)
+    R_mid_a2, A2_data = compute_data_A2(posvel, mass, R, A2_R_edges)
+    print(f"A2 bins: {len(R_mid_a2)}, peak A2 = {A2_data.max():.3f} at R = {R_mid_a2[A2_data.argmax()]:.2f} kpc")
+
+    # Pre-compute (x, y, z) evaluation coordinates for A2 computation
+    n_phi_a2, n_z_a2 = 64, 30
+    phi_a2 = np.linspace(0, 2 * np.pi, n_phi_a2, endpoint=False)
+    z_a2 = np.linspace(-zmax, zmax, n_z_a2)
+    dz_a2 = z_a2[1] - z_a2[0]
+
+    # Shape: (n_R, n_phi, n_z) -> flatten for batch evaluation
+    R_3d, PHI_3d, Z_3d = np.meshgrid(R_mid_a2, phi_a2, z_a2, indexing='ij')
+    x_a2_flat = (R_3d * np.cos(PHI_3d)).ravel()
+    y_a2_flat = (R_3d * np.sin(PHI_3d)).ravel()
+    z_a2_flat = Z_3d.ravel()
+    A2_shape = (len(R_mid_a2), n_phi_a2, n_z_a2)
+
     # ---------- 3. Build chi2 function ----------
     chi2_fn, chi2_and_grad_fn = make_chi2_fn(
         pos_flat[:, 0], pos_flat[:, 1], pos_flat[:, 2],
-        dens_flat, dens_err_flat)
+        dens_flat, dens_err_flat,
+        A2_data, (x_a2_flat, y_a2_flat, z_a2_flat), A2_shape, dz_a2, phi_a2,
+        lambda_A2=0.0)
     # Warm up JIT
     _test = jnp.array([0.0, 0.0, 9.0, 10.0, 0.0, -0.5, -0.5])
     _ = chi2_and_grad_fn(_test)
@@ -318,12 +395,16 @@ if __name__ == "__main__":
 
     cb = axes[1, 0].imshow(data_xz.T, origin='lower', extent=[xe[0], xe[-1], ze[0], ze[-1]],
                            norm='log', vmin=vmin_xz, vmax=vmax_xz)
+    axes[1, 0].contour(xmid, zmid, np.log10(np.clip(data_xz, 1, None)).T,
+                       levels=np.arange(5.5, 8.5, 0.5), colors='white', linewidths=0.5)
     axes[1, 0].set_title('Data (XZ)')
     axes[1, 0].set_xlabel('x [kpc]'); axes[1, 0].set_ylabel('z [kpc]')
     plt.colorbar(cb, ax=axes[1, 0], label='Mass')
 
     cb = axes[1, 1].imshow(model_xz.T, origin='lower', extent=[xe[0], xe[-1], ze[0], ze[-1]],
                            norm='log', vmin=vmin_xz, vmax=vmax_xz)
+    axes[1, 1].contour(xmid, zmid, np.log10(np.clip(model_xz, 1, None)).T,
+                          levels=np.arange(5.5, 8.5, 0.5), colors='white', linewidths=0.5)
     axes[1, 1].set_title('Model (XZ)')
     axes[1, 1].set_xlabel('x [kpc]'); axes[1, 1].set_ylabel('z [kpc]')
     plt.colorbar(cb, ax=axes[1, 1], label='Mass')
@@ -400,5 +481,46 @@ if __name__ == "__main__":
 
     fig.savefig(os.path.join(output_dir, 'fit_3d_density_profiles.png'), dpi=150, bbox_inches='tight')
     print(f"Saved profile plot to {output_dir}/fit_3d_density_profiles.png")
+
+    # --- 7c. Bar quadrupole strength A2(R) ---
+    A2_plot_edges = np.arange(0.25, 12.0, 0.25)
+    R_mid_plot, A2_data_plot = compute_data_A2(posvel, mass, R, A2_plot_edges)
+
+    # Model A2: evaluate on (R, phi, z) grid
+    n_phi_plot, n_z_plot = 128, 50
+    phi_plot = np.linspace(0, 2 * np.pi, n_phi_plot, endpoint=False)
+    z_plot = np.linspace(-zmax, zmax, n_z_plot)
+    dz_plot = z_plot[1] - z_plot[0]
+
+    A2_model_plot = np.zeros(len(R_mid_plot))
+    for j in range(len(R_mid_plot)):
+        Rj = R_mid_plot[j]
+        PHI, Z_p = np.meshgrid(phi_plot, z_plot, indexing='ij')
+        rho_eval = np.array(density_model(
+            jnp.asarray((Rj * np.cos(PHI)).ravel()),
+            jnp.asarray((Rj * np.sin(PHI)).ravel()),
+            jnp.asarray(Z_p.ravel()),
+            params_best,
+        )).reshape(n_phi_plot, n_z_plot)
+        Sigma = np.sum(rho_eval, axis=1) * dz_plot
+        a0 = np.mean(Sigma)
+        a2c = np.mean(Sigma * np.cos(2 * phi_plot))
+        a2s = np.mean(Sigma * np.sin(2 * phi_plot))
+        if a0 > 0:
+            A2_model_plot[j] = np.sqrt(a2c**2 + a2s**2) / a0
+
+    fig, ax = plt.subplots(1, 1, figsize=(8, 5))
+    ax.plot(R_mid_plot, A2_data_plot, 'k-', lw=2, label='N-body data')
+    ax.plot(R_mid_plot, A2_model_plot, 'r--', lw=2, label='Dehnen triaxial bar model')
+    ax.set_xlabel('R [kpc]')
+    ax.set_ylabel(r'$A_2 / A_0$')
+    ax.set_title('Bar quadrupole strength')
+    ax.legend()
+    ax.set_xlim(0, 12)
+    ax.set_ylim(0, None)
+    ax.axhline(0, color='gray', ls=':', lw=0.5)
+
+    fig.savefig(os.path.join(output_dir, 'fit_3d_density_A2.png'), dpi=150, bbox_inches='tight')
+    print(f"Saved A2 plot to {output_dir}/fit_3d_density_A2.png")
 
     plt.show()

@@ -1,9 +1,10 @@
 """
-Fit 3D density (DoubleExponentialDisk + T3 long bar + V4 B/P bulge) to an
+Fit 3D density (Miyamoto-Nagai disc + T3 long bar + V4 B/P bulge) to an
 N-body barred galaxy snapshot using scipy L-BFGS-B with multiple restarts.
 
 The idea: T3 captures the elongated bar, V4 captures the compact boxy/peanut
 bulge in the center. Both share the same bar orientation (aligned with x-axis).
+Using MN disc so that acceleration can be obtained analytically.
 
 Usage:
     python generate_mock_data/fit_3d_density_scipy_2bar.py
@@ -24,7 +25,7 @@ import agama
 from astropy.constants import G
 import astropy.units as u
 
-from densities import DoubleExponentialDisk_density
+from densities import MiyamotoNagai_density
 from dehnen_bar import T3_density, V4_density
 
 agama.setUnits(length=1, velocity=1, mass=1)
@@ -72,11 +73,11 @@ def compute_data_A2(posvel, mass, R_all, R_edges):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Density model: Disk + T3 (long bar) + V4 (B/P bulge)
+# Density model: Miyamoto-Nagai disc + T3 (long bar) + V4 (B/P bulge)
 # ──────────────────────────────────────────────────────────────────────────────
 # Both T3 and V4 have signature: density(x, y, z, M, a, b, L, gamma)
 
-    # Fixed V4 B/P bulge parameters
+# Fixed V4 B/P bulge parameters
 V4_A = 0.5     # scale length [kpc]
 V4_B = 0.5     # scale height [kpc]
 V4_L = 0.1     # half-length [kpc] — nearly axisymmetric
@@ -84,7 +85,7 @@ V4_GAMMA = 0.0 # needle slope
 
 @jax.jit
 def density_model(x, y, z, params):
-    rho_disk = DoubleExponentialDisk_density(x, y, z, params)
+    rho_disk = MiyamotoNagai_density(x, y, z, params)
     M_bar = 10.0 ** params['logM_bar']
     rho_bar = T3_density(x, y, z,
                          M_bar,
@@ -100,10 +101,10 @@ def density_model(x, y, z, params):
 # ──────────────────────────────────────────────────────────────────────────────
 # Chi-squared objective
 # ──────────────────────────────────────────────────────────────────────────────
-# theta layout (8D) — same count as single T3:
-#   0: log10(Rd)         disk
-#   1: log10(hz)         disk
-#   2: log10(rho0)       disk
+# theta layout (8D):
+#   0: log10(M_disc)     MN disc mass
+#   1: log10(Rs_disc)    MN disc scale length a
+#   2: log10(Hs_disc)    MN disc scale height b
 #   3: log10(M_bar)      T3 bar mass (= V4 bulge mass)
 #   4: log10(a_bar)      T3 bar
 #   5: log10(b_bar)      T3 bar
@@ -128,9 +129,9 @@ def make_chi2_fn(x, y, z, density_data, density_err,
     @jax.jit
     def _theta_to_params(theta):
         return {
-            'rho0_disc': 10.0 ** theta[2],
-            'Rd_disc':   10.0 ** theta[0],
-            'hz_disc':   10.0 ** theta[1],
+            'logM_disc': theta[0],
+            'Rs_disc':   10.0 ** theta[1],
+            'Hs_disc':   10.0 ** theta[2],
             'logM_bar':  theta[3],
             'a_bar':     10.0 ** theta[4],
             'b_bar':     10.0 ** theta[5],
@@ -260,7 +261,7 @@ if __name__ == "__main__":
         lambda_A2=0.1)
 
     # Warm up JIT  (8 params)
-    _test = jnp.array([0.7, -0.3, 8.5, 10.0, 0.0, -0.3, 3.0, 0.0])
+    _test = jnp.array([10.5, 0.7, -0.3, 10.0, 0.0, -0.3, 3.0, 0.0])
     print("JIT compiling (this may take a minute)...")
     _ = chi2_and_grad_fn(_test)
     print("JIT done.")
@@ -271,14 +272,13 @@ if __name__ == "__main__":
         return float(val), np.array(grad, dtype=np.float64)
 
     # ---------- 4. L-BFGS-B with multiple restarts ----------
-    #   0: log10(Rd)       1: log10(hz)      2: log10(rho0)
-    #   3: log10(M_bar)    4: log10(a_bar)   5: log10(b_bar)   6: L_bar   7: gamma_bar
-    #   8: log10(M_bulge)  9: log10(a_bulge) 10: log10(b_bulge) 11: L_bulge  12: gamma_bulge
+    #   0: log10(M_disc)   1: log10(Rs_disc)  2: log10(Hs_disc)
+    #   3: log10(M_bar)    4: log10(a_bar)    5: log10(b_bar)   6: L_bar   7: gamma_bar
     bounds = [
-        (-1, 2),      # 0  log10(Rd)
-        (-1, 1),      # 1  log10(hz)
-        (7, 11),      # 2  log10(rho0)
-        (8, 12),      # 3  log10(M_bar)       T3 bar (= V4 bulge mass)
+        (9, 12),      # 0  log10(M_disc)      MN disc mass
+        (-1, 2),      # 1  log10(Rs_disc)      MN disc scale length
+        (-2, 1),      # 2  log10(Hs_disc)      MN disc scale height
+        (8, 12),      # 3  log10(M_bar)        T3 bar (= V4 bulge mass)
         (-1, 1.5),    # 4  log10(a_bar)
         (-1, 1),      # 5  log10(b_bar)
         (0.5, 8.0),   # 6  L_bar              bar half-length
@@ -293,13 +293,13 @@ if __name__ == "__main__":
     initial_points = qmc.scale(lh_samples, lb, ub)
 
     # Hand-crafted starting points (8D)
-    #                  Rd    hz   rho0  Mbar  abar  bbar  Lbar  gbar
+    #                  Mdisc Rs_d  Hs_d  Mbar  abar  bbar  Lbar  gbar
     initial_points = np.vstack([
-        [0.75, -0.25, 8.2,  10.2, -0.2, -0.2, 4.0, 0.5],
-        [0.75, -0.30, 8.1,  10.5, 0.0,  -0.3, 3.5, 0.0],
-        [0.70, -0.20, 8.2,  10.3, -0.1, -0.2, 4.5, -0.5],
-        [0.80, -0.25, 8.0,  10.0, 0.0,  -0.3, 3.0, 0.8],
-        [0.75, -0.25, 8.2,   9.8, 0.2,  -0.2, 2.5, 0.0],
+        [10.8, 0.7,  -0.3,  10.2, -0.2, -0.2, 4.0, 0.5],
+        [10.5, 0.5,  -0.5,  10.5, 0.0,  -0.3, 3.5, 0.0],
+        [11.0, 0.8,  -0.2,  10.3, -0.1, -0.2, 4.5, -0.5],
+        [10.8, 0.6,  -0.4,  10.0, 0.0,  -0.3, 3.0, 0.8],
+        [10.5, 0.7,  -0.3,   9.8, 0.2,  -0.2, 2.5, 0.0],
         initial_points,
     ])
 
@@ -319,12 +319,12 @@ if __name__ == "__main__":
     theta_best = best_result.x
     chi2_best = best_result.fun
     param_names = [
-        'log10(Rd)', 'log10(hz)', 'log10(rho0)',
+        'log10(M_disc)', 'log10(Rs_disc)', 'log10(Hs_disc)',
         'log10(M_bar)', 'log10(a_bar)', 'log10(b_bar)', 'L_bar', 'gamma_bar',
     ]
 
     print("\n" + "=" * 60)
-    print("Best-fit parameters (Disk + T3 bar + V4 bulge [fixed]):")
+    print("Best-fit parameters (MN disc + T3 bar + V4 bulge [fixed]):")
     print("=" * 60)
     for name, val in zip(param_names, theta_best):
         print(f"  {name:15s} = {val:.6f}")
@@ -335,10 +335,10 @@ if __name__ == "__main__":
 
     M_bar_phys = 10**theta_best[3]
     print("\nPhysical parameters:")
-    print(f"  --- Disk ---")
-    print(f"  Rd          = {10**theta_best[0]:.4f} kpc")
-    print(f"  hz          = {10**theta_best[1]:.4f} kpc")
-    print(f"  rho0        = {10**theta_best[2]:.4e} Msun/kpc^3")
+    print(f"  --- Miyamoto-Nagai Disc ---")
+    print(f"  M_disc      = {10**theta_best[0]:.4e} Msun")
+    print(f"  Rs_disc (a) = {10**theta_best[1]:.4f} kpc")
+    print(f"  Hs_disc (b) = {10**theta_best[2]:.4f} kpc")
     print(f"  --- T3 long bar ---")
     print(f"  M_bar       = {M_bar_phys:.4e} Msun")
     print(f"  a_bar       = {10**theta_best[4]:.4f} kpc")
@@ -354,9 +354,9 @@ if __name__ == "__main__":
 
     # ---------- 6. Evaluate best-fit model on the grid ----------
     params_best = {
-        'rho0_disc': 10.0 ** theta_best[2],
-        'Rd_disc':   10.0 ** theta_best[0],
-        'hz_disc':   10.0 ** theta_best[1],
+        'logM_disc': theta_best[0],
+        'Rs_disc':   10.0 ** theta_best[1],
+        'Hs_disc':   10.0 ** theta_best[2],
         'logM_bar':  theta_best[3],
         'a_bar':     10.0 ** theta_best[4],
         'b_bar':     10.0 ** theta_best[5],
@@ -408,11 +408,15 @@ if __name__ == "__main__":
 
     cb = axes[1, 0].imshow(data_xz.T, origin='lower', extent=[xe[0], xe[-1], ze[0], ze[-1]],
                            norm='log', vmin=vmin_xz, vmax=vmax_xz)
+    axes[1, 0].contour(xmid, zmid, np.log10(np.clip(data_xz, 1, None)).T,
+                          levels=np.arange(5.5, 8.5, 0.5), colors='white', linewidths=0.5)
     axes[1, 0].set_title('Data (XZ)'); axes[1, 0].set_xlabel('x [kpc]'); axes[1, 0].set_ylabel('z [kpc]')
     plt.colorbar(cb, ax=axes[1, 0], label='Mass')
 
     cb = axes[1, 1].imshow(model_xz.T, origin='lower', extent=[xe[0], xe[-1], ze[0], ze[-1]],
                            norm='log', vmin=vmin_xz, vmax=vmax_xz)
+    axes[1, 1].contour(xmid, zmid, np.log10(np.clip(model_xz, 1, None)).T,
+                          levels=np.arange(5.5, 8.5, 0.5), colors='white', linewidths=0.5)
     axes[1, 1].set_title('Model (XZ)'); axes[1, 1].set_xlabel('x [kpc]'); axes[1, 1].set_ylabel('z [kpc]')
     plt.colorbar(cb, ax=axes[1, 1], label='Mass')
 
@@ -422,7 +426,7 @@ if __name__ == "__main__":
     axes[1, 2].set_aspect('equal')
     plt.colorbar(cb, ax=axes[1, 2], label='(Data-Model)/Data')
 
-    fig.suptitle(f'Disk + T3 bar + V4 bulge (fixed) — chi2/dof = {chi2_best/ndof:.4f}', fontsize=14)
+    fig.suptitle(f'MN disc + T3 bar + V4 bulge (fixed) — chi2/dof = {chi2_best/ndof:.4f}', fontsize=14)
     fig.savefig(os.path.join(output_dir, 'fit_3d_density_2bar_projections.png'), dpi=150, bbox_inches='tight')
     print(f"\nSaved projection plot")
 
