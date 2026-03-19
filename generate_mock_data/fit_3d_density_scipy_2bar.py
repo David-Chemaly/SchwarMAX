@@ -174,7 +174,7 @@ def make_chi2_fn(x, y, z, density_data, density_err,
 if __name__ == "__main__":
 
     # ---------- 1. Load & preprocess snapshot ----------
-    snapshot_path = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data/Bar_model_TG21/model/t_t0_4'
+    snapshot_path = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data/Bar_model_TG21/model/t_t0_7'
     print(f"Loading snapshot: {snapshot_path}")
     posvel, mass = agama.readSnapshot(snapshot_path)
 
