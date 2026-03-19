@@ -190,8 +190,12 @@ def get_jeans_moments(x_star, y_star, z_star, dict_phi, params_disc, params_halo
 def get_jeans_moments_fixed(x_star, y_star, z_star, dict_phi_baryon, params_halo, anisotropy_b=1.0):
     """
     Like get_jeans_moments, but uses density reconstructed from the baryon
-    potential via Poisson's equation (get_density), instead of an analytic
-    density function.  Everything else is identical.
+    potential via Poisson's equation, instead of an analytic density function.
+
+    The density is clipped to non-negative values and the integration upper
+    limit is capped at z=5 kpc (well within the spline's reliable region,
+    Zmax=10) to avoid artifacts from the CylindricalSpline Laplacian at
+    high z where spline ringing produces negative / exploding density.
 
     Parameters
     ----------
@@ -201,15 +205,16 @@ def get_jeans_moments_fixed(x_star, y_star, z_star, dict_phi_baryon, params_halo
         NFW halo parameters (logM, Rs, ...).
     """
     R_star = jnp.sqrt(x_star**2 + y_star**2)
+    z_int_max = 5.0  # safe integration ceiling (spline artifacts appear above ~3 kpc)
 
     def nu(x, y, z):
-        return density_from_potential(x, y, z, dict_phi_baryon)
+        return jnp.maximum(density_from_potential(x, y, z, dict_phi_baryon), 0.0)
 
     # --- Step 1: Sigma_z (Vertical Integration) ---
     def integrand(z_prime):
         return nu(x_star, y_star, z_prime) * dPhi_dz(x_star, y_star, z_prime, dict_phi_baryon, params_halo)
 
-    pts = jnp.linspace(jnp.abs(z_star), 10.0, 1000)
+    pts = jnp.linspace(jnp.abs(z_star), z_int_max, 1000)
     integrand_val = jax.vmap(integrand, in_axes=(0))(pts)
     integral_val = jsp.integrate.trapezoid(integrand_val, pts)
 
@@ -225,7 +230,7 @@ def get_jeans_moments_fixed(x_star, y_star, z_star, dict_phi_baryon, params_halo
     def vertical_pressure(r_in):
         def integrand_r(z_prime):
             return nu(r_in, 0, z_prime) * dPhi_dz(r_in, 0, z_prime, dict_phi_baryon, params_halo)
-        pts = jnp.linspace(jnp.abs(z_star), 10.0, 1000)
+        pts = jnp.linspace(jnp.abs(z_star), z_int_max, 1000)
         integrand_val = jax.vmap(integrand_r, in_axes=(0))(pts)
         return jsp.integrate.trapezoid(integrand_val, pts)
 
@@ -1013,19 +1018,19 @@ def model_fixed_potential(params_halo_pot, dict_phi_baryon, Omega_bar, light_to_
 
     #================================== Preprocess the obtained matrices ============================================
 
-    # 3D density target: reconstruct baryonic density from the potential via Poisson's equation
-    @jax.jit
-    def density_func_fixed_Rz(R, z, phi, dict_phi_b):
+    # 3D density target: reconstruct from the baryonic potential via Poisson's eq.
+    # Uses the same (R, z, phi) grid and Monte-Carlo integration as model().
+    def density_from_pot_Rz(R, z, phi, dict_phi):
         x = R * jnp.cos(phi)
         y = R * jnp.sin(phi)
-        return density_from_potential(x, y, z, dict_phi_b)
+        return jnp.maximum(density_from_potential(x, y, z, dict_phi), 0.0)
 
     @partial(jax.jit, static_argnames=['rho_fct'])
-    def get_mass_fixed(R_grid, z_grid, phi_grid, rho_fct, dict_params, dR, dz, dphi, sample):
+    def get_mass_fixed(R_grid, z_grid, phi_grid, rho_fct, dict_phi, dR, dz, dphi, sample):
         R_samples = R_grid + (sample[:,0] - 0.5) * dR
         z_samples = z_grid + (sample[:,1] - 0.5) * dz
         phi_samples = phi_grid + (sample[:,2] - 0.5) * dphi
-        density_samples = rho_fct(R_samples, z_samples, phi_samples, dict_params)
+        density_samples = rho_fct(R_samples, z_samples, phi_samples, dict_phi)
         mass_tot = jnp.sum(density_samples * R_samples) / sample.shape[0]
         return mass_tot
 
@@ -1033,7 +1038,7 @@ def model_fixed_potential(params_halo_pot, dict_phi_baryon, Omega_bar, light_to_
     z_grid, dz = dict_data['z_grid'], dict_data['dz']
     phi_grid, dphi = dict_data['phi_grid'], dict_data['dphi']
     y_Rzphi = jax.vmap(get_mass_fixed, in_axes=[0, 0, 0, None, None, None, None, None, None])(
-                R_grid, z_grid, phi_grid, density_func_fixed_Rz, dict_phi_baryon, dR, dz, dphi, dict_data['sample_for_integration']
+                R_grid, z_grid, phi_grid, density_from_pot_Rz, dict_phi_baryon, dR, dz, dphi, dict_data['sample_for_integration']
     )
 
     y_xy = dict_data['XY_density_data'].astype(jnp.float32)
