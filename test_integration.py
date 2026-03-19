@@ -220,7 +220,7 @@ if __name__ == "__main__":
         'q_bar': 0.3,
     }
 
-    n_samples = 10_000  # Same number as original data
+    n_samples = 5_000  # Same number as original data
     x_grid = np.linspace(0, 15, 1000)
     logP_xexp = XexpX_pdf_log(x_grid, 4.0)
     key = jax.random.PRNGKey(10086)
@@ -459,7 +459,7 @@ if __name__ == "__main__":
 
         return tN, wN 
 
-    N_step_per_orb = 100
+    N_step_per_orb = 200
     N_dynamical_time = 20
     dt = T_orb / N_step_per_orb
     time_integrate = T_orb * N_dynamical_time
@@ -506,25 +506,69 @@ if __name__ == "__main__":
     dt_batch = T_orb_batch / N_step_per_orb
     unroll = False
     initial_time = 0.0
-    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid = _integrate_barred_vmap(
-                        w0_new, acc_fn, pot_fn, n_steps, dt, initial_time, -Omega_bar, unroll,
-                        num_Vbin, bin_mapping, num_per_bin,
-                        Rzphi_lim_grid, xy_lim_grid,
-                        Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
-                        v0, s, rotation_matrix)
+
+    # Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid = _integrate_barred_vmap(
+    #                     w0_new, acc_fn, pot_fn, n_steps, dt, initial_time, -Omega_bar, unroll,
+    #                     num_Vbin, bin_mapping, num_per_bin,
+    #                     Rzphi_lim_grid, xy_lim_grid,
+    #                     Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
+    #                     v0, s, rotation_matrix)
+    # Rzphi_bin_counts.block_until_ready()
+    # A_Rzphi = Rzphi_bin_counts.T / n_steps
+    # A_xy = surface_density.T / n_steps
+    # A_h1 = h1.T
+    # A_h2 = h2.T
+    # A_h3 = h3.T
+    # A_h4 = h4.T
+
     # Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid = _integrate_batch_vmap(
     #                     w0_new_batch, acc_fn, pot_fn, n_steps, dt_batch, initial_time, -Omega_bar, unroll,
     #                     num_Vbin, bin_mapping, num_per_bin,
     #                     Rzphi_lim_grid, xy_lim_grid,
     #                     Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
     #                     v0, s, rotation_matrix)
+    # Rzphi_bin_counts.block_until_ready()
+    # A_Rzphi = Rzphi_bin_counts.T# / n_steps
+    # A_xy = surface_density.T #/ n_steps
+    # A_h1 = h1.T
+    # A_h2 = h2.T
+    # A_h3 = h3.T
+    # A_h4 = h4.T
+
+    w0_new_batch_flattened = w0_new_batch.reshape(-1, 6)
+    dt_batch_flattened = dt_batch.reshape(-1)
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid_unbatch = _integrate_barred_vmap(
+                        w0_new_batch_flattened, acc_fn, pot_fn, n_steps, dt_batch_flattened, initial_time, -Omega_bar, unroll,
+                        num_Vbin, bin_mapping, num_per_bin,
+                        Rzphi_lim_grid, xy_lim_grid,
+                        Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
+                        v0, s, rotation_matrix)
     Rzphi_bin_counts.block_until_ready()
-    A_Rzphi = Rzphi_bin_counts.T / n_steps
-    A_xy = surface_density.T / n_steps
-    A_h1 = h1.T
-    A_h2 = h2.T
-    A_h3 = h3.T
-    A_h4 = h4.T
+    A_Rzphi_unbatch = Rzphi_bin_counts.T / n_steps
+    A_xy_unbatch = surface_density.T / n_steps
+    A_h1_unbatch = h1.T
+    A_h2_unbatch = h2.T
+    A_h3_unbatch = h3.T
+    A_h4_unbatch = h4.T
+    A_h1_unbatch, A_h2_unbatch, A_h3_unbatch, A_h4_unbatch = A_h1_unbatch * A_xy_unbatch, A_h2_unbatch * A_xy_unbatch, A_h3_unbatch * A_xy_unbatch, A_h4_unbatch * A_xy_unbatch
+    A_Rzphi_reshape = A_Rzphi_unbatch.reshape(Rzphi_n_tot, n_realizations, n_particles)
+    A_xy_reshape = A_xy_unbatch.reshape(num_Vbin, n_realizations, n_particles)
+    A_h1_reshape = A_h1_unbatch.reshape(num_Vbin, n_realizations, n_particles)
+    A_h2_reshape = A_h2_unbatch.reshape(num_Vbin, n_realizations, n_particles)
+    A_h3_reshape = A_h3_unbatch.reshape(num_Vbin, n_realizations, n_particles)
+    A_h4_reshape = A_h4_unbatch.reshape(num_Vbin, n_realizations, n_particles)
+    norm = jnp.sum(valid_unbatch.reshape(n_particles, n_realizations), axis = 1) + 0.1
+    A_Rzphi = jnp.sum(A_Rzphi_reshape, axis = 1) / norm[jnp.newaxis, :]
+    A_xy = jnp.sum(A_xy_reshape, axis = 1) / norm[jnp.newaxis, :]
+    A_h1 = jnp.sum(A_h1_reshape, axis = 1) / norm[jnp.newaxis, :]
+    A_h2 = jnp.sum(A_h2_reshape, axis = 1) / norm[jnp.newaxis, :]
+    A_h3 = jnp.sum(A_h3_reshape, axis = 1) / norm[jnp.newaxis, :]
+    A_h4 = jnp.sum(A_h4_reshape, axis = 1) / norm[jnp.newaxis, :]
+    A_h1 = A_h1 / (A_xy + EPSILON)
+    A_h2 = A_h2 / (A_xy + EPSILON)
+    A_h3 = A_h3 / (A_xy + EPSILON)
+    A_h4 = A_h4 / (A_xy + EPSILON)
+    valid = norm
     time_end = time.time()
     print(f"Time taken to integrate orbits and compute observables: {time_end - time_start:.2f} seconds")
     print(A_Rzphi.shape)
@@ -573,7 +617,7 @@ if __name__ == "__main__":
     sig_Rzphi = sig_Rzphi / mean_mass_per_orb
 
     path_data = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data/'
-    with open(path_data + 'orbital_library_bar_1.pkl', 'wb') as f:
+    with open(path_data + 'orbital_library_bar_5.pkl', 'wb') as f:
         orb_lib = (A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4, \
            y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4, \
            sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4)
