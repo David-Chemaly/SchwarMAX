@@ -287,8 +287,8 @@ dict_data = get_dict_data(path)
 
 # Parameters
 logM_halo, logM_disc, logM_bar, logRs_halo = 11.8, 10.7, 10.1, 1.2
-logRs_disc, logHs_disc, logL_bar = 0.8, -0.24, 0.3
-alpha_best_fit, beta_best_fit, gamma_best_fit = 30*np.pi/180, 20*np.pi/180, 140*np.pi/180
+logRs_disc, logHs_disc, logL_bar = 0.8, -0.24, 0.5
+alpha_best_fit, beta_best_fit, gamma_best_fit = 30, 20, 140
 logLM, logOmega_bar = 0, 1.6
 
 L_bar = 10.0 ** logL_bar

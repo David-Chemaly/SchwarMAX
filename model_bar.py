@@ -38,6 +38,18 @@ path = '../SchwarMAX/'
 V4_A, V4_B, V4_L, V4_GAMMA = 0.5, 0.5, 0.1, 0.0
 GAMMA_BAR = 1.0
 
+# ---- Marginalization constants ----
+N_ACTIVE_MAX = 1000   # pad active set to this fixed size for JIT
+N_QMC = 64            # number of QMC weight samples
+EIG_THRESHOLD = 0.01  # eigenvalue threshold for keeping directions
+W_THRESHOLD = 1e-6    # weight threshold for active set
+
+# Pre-generate QMC samples at import time (Sobol sequence, fixed seed)
+from scipy.stats import qmc as _qmc
+_sampler = _qmc.Sobol(d=N_ACTIVE_MAX, scramble=True, seed=42)
+_U_sobol = np.clip(_sampler.random(N_QMC), 1e-6, 1 - 1e-6)
+Z_QMC = jnp.array(jax.scipy.stats.norm.ppf(jnp.array(_U_sobol, dtype=jnp.float32)))
+
 
 @jax.jit
 def density_func(x, y, z, params):
@@ -299,25 +311,21 @@ def solve_qp_boxcdqp(
 
     y_xy_safe = jnp.where(jnp.abs(y_xy) > eps, y_xy, 1.0)
 
-    w_rzphi = jnp.sqrt(5.0 / A_Rzphi.shape[0])
-    w_xy = jnp.sqrt(5.0 / A_xy.shape[0])
-    w_h = jnp.sqrt(1.0 / A_h1.shape[0])
+    U_rz = A_Rzphi / (sig_Rzphi[:, None] + eps)
+    y_rz = y_Rzphi / (sig_Rzphi + eps)
 
-    U_rz = w_rzphi * (A_Rzphi / (sig_Rzphi[:, None] + eps))
-    y_rz = w_rzphi * (y_Rzphi / (sig_Rzphi + eps))
+    U_xy = A_xy / (sig_xy[:, None] + eps)
+    y_xy_obs = y_xy / (sig_xy + eps)
 
-    U_xy = w_xy * (A_xy / (sig_xy[:, None] + eps))
-    y_xy_obs = w_xy * (y_xy / (sig_xy + eps))
+    U_h1 = (A_h1 * A_xy) / y_xy_safe[:, None] / (sig_A1[:, None] + eps)
+    U_h2 = (A_h2 * A_xy) / y_xy_safe[:, None] / (sig_A2[:, None] + eps)
+    U_h3 = (A_h3 * A_xy) / y_xy_safe[:, None] / (sig_A3[:, None] + eps)
+    U_h4 = (A_h4 * A_xy) / y_xy_safe[:, None] / (sig_A4[:, None] + eps)
 
-    U_h1 = w_h * ((A_h1 * A_xy) / y_xy_safe[:, None] / (sig_A1[:, None] + eps))
-    U_h2 = w_h * ((A_h2 * A_xy) / y_xy_safe[:, None] / (sig_A2[:, None] + eps))
-    U_h3 = w_h * ((A_h3 * A_xy) / y_xy_safe[:, None] / (sig_A3[:, None] + eps))
-    U_h4 = w_h * ((A_h4 * A_xy) / y_xy_safe[:, None] / (sig_A4[:, None] + eps))
-
-    y_h1_obs = w_h * (y_h1 / (sig_A1 + eps))
-    y_h2_obs = w_h * (y_h2 / (sig_A2 + eps))
-    y_h3_obs = w_h * (y_h3 / (sig_A3 + eps))
-    y_h4_obs = w_h * (y_h4 / (sig_A4 + eps))
+    y_h1_obs = y_h1 / (sig_A1 + eps)
+    y_h2_obs = y_h2 / (sig_A2 + eps)
+    y_h3_obs = y_h3 / (sig_A3 + eps)
+    y_h4_obs = y_h4 / (sig_A4 + eps)
 
     U = jnp.vstack([U_rz, U_xy, U_h1, U_h2, U_h3, U_h4])
     y = jnp.concatenate([y_rz, y_xy_obs, y_h1_obs, y_h2_obs, y_h3_obs, y_h4_obs])
@@ -346,24 +354,20 @@ def solve_fista_nnls(
     eps = 1e-8
     y_xy_safe = jnp.where(jnp.abs(y_xy) > eps, y_xy, 1.0)
 
-    w_rzphi = jnp.sqrt(5.0 / A_Rzphi.shape[0])
-    w_xy    = jnp.sqrt(5.0 / A_xy.shape[0])
-    w_h     = jnp.sqrt(1.0 / A_h1.shape[0])
+    U_rz  = A_Rzphi / (sig_Rzphi[:, None] + eps)
+    b_rz  = y_Rzphi / (sig_Rzphi + eps)
 
-    U_rz  = w_rzphi * (A_Rzphi / (sig_Rzphi[:, None] + eps))
-    b_rz  = w_rzphi * (y_Rzphi / (sig_Rzphi + eps))
+    U_xy_ = A_xy / (sig_xy[:, None] + eps)
+    b_xy  = y_xy / (sig_xy + eps)
 
-    U_xy_ = w_xy * (A_xy / (sig_xy[:, None] + eps))
-    b_xy  = w_xy * (y_xy / (sig_xy + eps))
-
-    U_h1_ = w_h * ((A_h1 * A_xy) / y_xy_safe[:, None] / (sig_A1[:, None] + eps))
-    U_h2_ = w_h * ((A_h2 * A_xy) / y_xy_safe[:, None] / (sig_A2[:, None] + eps))
-    U_h3_ = w_h * ((A_h3 * A_xy) / y_xy_safe[:, None] / (sig_A3[:, None] + eps))
-    U_h4_ = w_h * ((A_h4 * A_xy) / y_xy_safe[:, None] / (sig_A4[:, None] + eps))
-    b_h1  = w_h * (y_h1 / (sig_A1 + eps))
-    b_h2  = w_h * (y_h2 / (sig_A2 + eps))
-    b_h3  = w_h * (y_h3 / (sig_A3 + eps))
-    b_h4  = w_h * (y_h4 / (sig_A4 + eps))
+    U_h1_ = (A_h1 * A_xy) / y_xy_safe[:, None] / (sig_A1[:, None] + eps)
+    U_h2_ = (A_h2 * A_xy) / y_xy_safe[:, None] / (sig_A2[:, None] + eps)
+    U_h3_ = (A_h3 * A_xy) / y_xy_safe[:, None] / (sig_A3[:, None] + eps)
+    U_h4_ = (A_h4 * A_xy) / y_xy_safe[:, None] / (sig_A4[:, None] + eps)
+    b_h1  = y_h1 / (sig_A1 + eps)
+    b_h2  = y_h2 / (sig_A2 + eps)
+    b_h3  = y_h3 / (sig_A3 + eps)
+    b_h4  = y_h4 / (sig_A4 + eps)
 
     U = jnp.vstack([U_rz, U_xy_, U_h1_, U_h2_, U_h3_, U_h4_])
     b = jnp.concatenate([b_rz, b_xy, b_h1, b_h2, b_h3, b_h4])
@@ -412,6 +416,118 @@ def solve_fista_nnls(
     return jax.lax.stop_gradient(w_final)
 
 
+@jax.jit
+def _compute_logl_from_weights(w, A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+                                y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+                                sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4):
+    """
+    Compute logL for a weight vector. Matches the NNLS objective
+    (no /N_bins, no extra weighting factors).
+    """
+    eps = 1e-8
+    y_xy_safe = jnp.where(jnp.abs(y_xy) > eps, y_xy, 1.0)
+
+    res_Rzphi = ((A_Rzphi @ w - y_Rzphi) / (sig_Rzphi + EPSILON))**2
+    res_density = ((A_xy @ w - y_xy) / (sig_xy + EPSILON))**2
+
+    h1_model = (A_h1 * A_xy) @ w / y_xy_safe
+    h2_model = (A_h2 * A_xy) @ w / y_xy_safe
+    h3_model = (A_h3 * A_xy) @ w / y_xy_safe
+    h4_model = (A_h4 * A_xy) @ w / y_xy_safe
+
+    clip_val = 10.0
+    h1_model = jnp.clip(h1_model, -clip_val, clip_val)
+    h2_model = jnp.clip(h2_model, -clip_val, clip_val)
+    h3_model = jnp.clip(h3_model, -clip_val, clip_val)
+    h4_model = jnp.clip(h4_model, -clip_val, clip_val)
+
+    res_h1 = jnp.where(h1_model < 9.9, ((h1_model - y_h1) / (sig_A1 + EPSILON))**2, 0)
+    res_h2 = jnp.where(h2_model < 9.9, ((h2_model - y_h2) / (sig_A2 + EPSILON))**2, 0)
+    res_h3 = jnp.where(h3_model < 9.9, ((h3_model - y_h3) / (sig_A3 + EPSILON))**2, 0)
+    res_h4 = jnp.where(h4_model < 9.9, ((h4_model - y_h4) / (sig_A4 + EPSILON))**2, 0)
+
+    return -0.5 * (jnp.nansum(res_Rzphi) + jnp.nansum(res_density) +
+                   jnp.nansum(res_h1) + jnp.nansum(res_h2) +
+                   jnp.nansum(res_h3) + jnp.nansum(res_h4))
+
+
+@jax.jit
+def marginalize_weights(weights,
+                        A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+                        y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+                        sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+                        lambda_reg):
+    """
+    Marginalize logL over orbital weight uncertainty using
+    eigendecomposition-based QMC sampling in the active subspace.
+
+    TODO: sampling currently disabled for determinism testing.
+    Returns logL_best (no marginalization penalty).
+    """
+    # --- TEMPORARILY DISABLED: just return logL_best ---
+    return _compute_logl_from_weights(
+        weights, A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+        y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+        sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4)
+
+    # --- Full marginalization (re-enable later) ---
+    # n_orb = weights.shape[0]
+    # reg = lambda_reg / n_orb
+    # eps = 1e-8
+
+    # y_xy_safe = jnp.where(jnp.abs(y_xy) > eps, y_xy, 1.0)
+
+    # # Build stacked design matrix U (same as NNLS objective)
+    # U_rz  = A_Rzphi / (sig_Rzphi[:, None] + eps)
+    # U_xy  = A_xy / (sig_xy[:, None] + eps)
+    # U_h1  = (A_h1 * A_xy) / y_xy_safe[:, None] / (sig_A1[:, None] + eps)
+    # U_h2  = (A_h2 * A_xy) / y_xy_safe[:, None] / (sig_A2[:, None] + eps)
+    # U_h3  = (A_h3 * A_xy) / y_xy_safe[:, None] / (sig_A3[:, None] + eps)
+    # U_h4  = (A_h4 * A_xy) / y_xy_safe[:, None] / (sig_A4[:, None] + eps)
+    # U = jnp.vstack([U_rz, U_xy, U_h1, U_h2, U_h3, U_h4])
+
+    # # Active set: top N_ACTIVE_MAX weights
+    # sorted_idx = jnp.argsort(-weights)[:N_ACTIVE_MAX]
+    # active_weights = weights[sorted_idx]
+    # active_mask = (active_weights > W_THRESHOLD).astype(jnp.float32)
+    # U_active = U[:, sorted_idx] * active_mask[None, :]
+
+    # # Q_active = U_active^T U_active + reg * I
+    # Q_active = U_active.T @ U_active + reg * jnp.eye(N_ACTIVE_MAX)
+
+    # # Eigendecomposition
+    # eigvals, eigvecs = jnp.linalg.eigh(Q_active)
+
+    # # Keep well-constrained directions
+    # keep_mask = (eigvals > EIG_THRESHOLD).astype(jnp.float32)
+    # eigvals_safe = jnp.where(eigvals > EIG_THRESHOLD, eigvals, 1e10)
+    # sigma_eig = 1.0 / jnp.sqrt(eigvals_safe)
+
+    # # QMC perturbations in eigenbasis → weight space
+    # z_masked = Z_QMC * keep_mask[None, :]          # (N_QMC, N_ACTIVE_MAX)
+    # scaled_z = z_masked * sigma_eig[None, :]
+    # delta_w_active = scaled_z @ eigvecs.T           # (N_QMC, N_ACTIVE_MAX)
+    # w_active_samples = jnp.maximum(active_weights[None, :] + delta_w_active, 0.0)
+
+    # # Scatter into full weight arrays
+    # w_full = jnp.tile(weights[None, :], (N_QMC, 1))
+    # w_full = w_full.at[:, sorted_idx].set(w_active_samples)
+
+    # # Compute logL for each sample using vmap
+    # def _logl_single(w_i):
+    #     return _compute_logl_from_weights(
+    #         w_i, A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+    #         y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+    #         sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4)
+
+    # logl_samples = jax.vmap(_logl_single)(w_full)   # (N_QMC,)
+
+    # # Log-mean-exp
+    # logl_max = jnp.max(logl_samples)
+    # logl_marg = logl_max + jnp.log(jnp.mean(jnp.exp(logl_samples - logl_max)))
+    # return logl_marg
+
+
 @partial(jax.jit, static_argnames=("maxiter",))
 def solve_nnls_admm(
     A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
@@ -422,22 +538,18 @@ def solve_nnls_admm(
     eps = 1e-8
     y_xy_safe = jnp.where(jnp.abs(y_xy) > eps, y_xy, 1.0)
 
-    w_rzphi = jnp.sqrt(5.0 / A_Rzphi.shape[0])
-    w_xy    = jnp.sqrt(5.0 / A_xy.shape[0])
-    w_h     = jnp.sqrt(1.0 / A_h1.shape[0])
-
-    U_rz  = w_rzphi * (A_Rzphi / (sig_Rzphi[:, None] + eps))
-    y_rz  = w_rzphi * (y_Rzphi / (sig_Rzphi + eps))
-    U_xy_ = w_xy * (A_xy / (sig_xy[:, None] + eps))
-    y_xy_ = w_xy * (y_xy / (sig_xy + eps))
-    U_h1_ = w_h * ((A_h1 * A_xy) / y_xy_safe[:, None] / (sig_A1[:, None] + eps))
-    U_h2_ = w_h * ((A_h2 * A_xy) / y_xy_safe[:, None] / (sig_A2[:, None] + eps))
-    U_h3_ = w_h * ((A_h3 * A_xy) / y_xy_safe[:, None] / (sig_A3[:, None] + eps))
-    U_h4_ = w_h * ((A_h4 * A_xy) / y_xy_safe[:, None] / (sig_A4[:, None] + eps))
-    y_h1_ = w_h * (y_h1 / (sig_A1 + eps))
-    y_h2_ = w_h * (y_h2 / (sig_A2 + eps))
-    y_h3_ = w_h * (y_h3 / (sig_A3 + eps))
-    y_h4_ = w_h * (y_h4 / (sig_A4 + eps))
+    U_rz  = A_Rzphi / (sig_Rzphi[:, None] + eps)
+    y_rz  = y_Rzphi / (sig_Rzphi + eps)
+    U_xy_ = A_xy / (sig_xy[:, None] + eps)
+    y_xy_ = y_xy / (sig_xy + eps)
+    U_h1_ = (A_h1 * A_xy) / y_xy_safe[:, None] / (sig_A1[:, None] + eps)
+    U_h2_ = (A_h2 * A_xy) / y_xy_safe[:, None] / (sig_A2[:, None] + eps)
+    U_h3_ = (A_h3 * A_xy) / y_xy_safe[:, None] / (sig_A3[:, None] + eps)
+    U_h4_ = (A_h4 * A_xy) / y_xy_safe[:, None] / (sig_A4[:, None] + eps)
+    y_h1_ = y_h1 / (sig_A1 + eps)
+    y_h2_ = y_h2 / (sig_A2 + eps)
+    y_h3_ = y_h3 / (sig_A3 + eps)
+    y_h4_ = y_h4 / (sig_A4 + eps)
 
     U = jnp.vstack([U_rz, U_xy_, U_h1_, U_h2_, U_h3_, U_h4_])
     y = jnp.concatenate([y_rz, y_xy_, y_h1_, y_h2_, y_h3_, y_h4_])
@@ -489,6 +601,9 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     Omega_bar = params_disk_rho['Omega_bar']
     alpha, beta, gamma = params_disk_rho['alpha'], params_disk_rho['beta'], params_disk_rho['gamma']
     rotation_matrix = makeRotationMatrix(alpha, beta, gamma)
+
+    sigma_density_model = params_disk_rho['sigma_density_model']
+    sigma_kine_model = params_disk_rho['sigma_kine_model']
 
     #=========================================== BUILD BARYON PARAMS =====================================================
     # Derive bar parameters
@@ -645,6 +760,12 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     sig_A3 = jnp.where(h_err_min > dict_data['h3_data_err'], h_err_min, dict_data['h3_data_err']) + EPSILON
     sig_A4 = jnp.where(h_err_min > dict_data['h4_data_err'], h_err_min, dict_data['h4_data_err']) + EPSILON
 
+    sig_xy = jnp.sqrt(sig_xy**2 + (sigma_density_model*y_xy)**2)
+    sig_A1 = jnp.sqrt(sig_A1**2 + (sigma_kine_model)**2)
+    sig_A2 = jnp.sqrt(sig_A2**2 + (sigma_kine_model)**2)
+    sig_A3 = jnp.sqrt(sig_A3**2 + (sigma_kine_model)**2)
+    sig_A4 = jnp.sqrt(sig_A4**2 + (sigma_kine_model)**2)
+
     mean_mass_per_orb = jnp.sum(y_Rzphi) / A_Rzphi.shape[1]
 
     y_xy = y_xy / mean_mass_per_orb
@@ -680,6 +801,20 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     h3_model = jnp.where(h3_model < -clip_val, -clip_val, h3_model)
     h4_model = jnp.where(h4_model < -clip_val, -clip_val, h4_model)
 
+    #===================================== Compute logL_best from already-computed quantities ==============================
+    # TODO: temporarily bypassing marginalization for determinism testing — reuse matmuls above
+    res_Rzphi = ((A_Rzphi @ weights - y_Rzphi) / (sig_Rzphi + EPSILON))**2
+    res_density = ((density_2DXY - y_xy) / (sig_xy + EPSILON))**2
+    res_h1 = jnp.where(h1_model < 9.9, ((h1_model - y_h1) / (sig_A1 + EPSILON))**2, 0)
+    res_h2 = jnp.where(h2_model < 9.9, ((h2_model - y_h2) / (sig_A2 + EPSILON))**2, 0)
+    res_h3 = jnp.where(h3_model < 9.9, ((h3_model - y_h3) / (sig_A3 + EPSILON))**2, 0)
+    res_h4 = jnp.where(h4_model < 9.9, ((h4_model - y_h4) / (sig_A4 + EPSILON))**2, 0)
+    logl_marg = -0.5 * (jnp.nansum(res_density) +
+                        jnp.nansum(res_h1) + jnp.nansum(res_h2) +
+                        jnp.nansum(res_h3) + jnp.nansum(res_h4)) - 2 * (jnp.sum(jnp.log(sig_xy)) + 
+                        jnp.sum(jnp.log(sig_A1)) + jnp.sum(jnp.log(sig_A2)) + 
+                        jnp.sum(jnp.log(sig_A3)) + jnp.sum(jnp.log(sig_A4)))
+
     V_model, sigma_model = h_to_V_sigma(h1_model, h2_model, v0, s)
 
     density_set = (density_2DXY, y_xy, sig_xy)
@@ -688,7 +823,7 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     h3_set = (h3_model, y_h3, sig_A3)
     h4_set = (h4_model, y_h4, sig_A4)
 
-    return density_set, V_model, sigma_model, h1_set, h2_set, h3_set, h4_set, weights
+    return density_set, V_model, sigma_model, h1_set, h2_set, h3_set, h4_set, weights, logl_marg
 
 
 @partial(jax.jit, static_argnames=('num_Vbin'))

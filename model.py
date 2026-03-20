@@ -605,9 +605,9 @@ def solve_nnls_admm(
     eps = 1e-8
     y_xy_safe = jnp.where(jnp.abs(y_xy) > eps, y_xy, 1.0)
 
-    w_rzphi = jnp.sqrt(5.0 / A_Rzphi.shape[0])
-    w_xy    = jnp.sqrt(5.0 / A_xy.shape[0])
-    w_h     = jnp.sqrt(1.0 / A_h1.shape[0])
+    w_rzphi = jnp.sqrt(1.0)# / A_Rzphi.shape[0]
+    w_xy    = jnp.sqrt(1.0)# / A_xy.shape[0]
+    w_h     = jnp.sqrt(1.0)# / A_h1.shape[0]
 
     U_rz  = w_rzphi * (A_Rzphi / (sig_Rzphi[:, None] + eps))
     y_rz  = w_rzphi * (y_Rzphi / (sig_Rzphi + eps))

@@ -163,17 +163,17 @@ def plot_prettier(dpi=200, fontsize=11, usetex=False):
 if __name__ == "__main__":
     plot_prettier(usetex=False)
     dict_data = get_dict_data(path)
-    solver = os.environ.get("WEIGHT_SOLVER", "lbfgs").lower()
-    solver_maxiter = int(os.environ.get("WEIGHT_SOLVER_MAXITER", "1000"))
+    solver = os.environ.get("WEIGHT_SOLVER", "admm").lower()
+    solver_maxiter = int(os.environ.get("WEIGHT_SOLVER_MAXITER", "200"))
     solver_power_iters = int(os.environ.get("WEIGHT_SOLVER_POWER_ITERS", "12"))
     solver_cg_maxiter = int(os.environ.get("WEIGHT_SOLVER_CG_MAXITER", "8"))
 
     path_data = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data/'
-    with open(path_data + 'orbital_library_bar_5.pkl', 'rb') as f:
+    with open(path_data + 'orbital_library_adaptive_Nmax1e4.pkl', 'rb') as f:
         orb_lib = pickle.load(f)
     (A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4, \
            y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4, \
-           sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4) = orb_lib
+           sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4, _) = orb_lib
     
     # print(A_h3, A_h4)
     
@@ -231,6 +231,7 @@ if __name__ == "__main__":
 
     fig, ax = plt.subplots(1,1, figsize=(8,6))
     ax.hist(jnp.log(weights), range = [-10, 5], bins=30, alpha=0.7, color='blue', edgecolor='black')
+    print('active orbits:', jnp.sum(weights > 1e-3))
 
     bin_mapping = dict_data['bin_mapping']
     index_remap = bin_mapping[:-1]

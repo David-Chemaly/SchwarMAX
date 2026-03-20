@@ -102,7 +102,7 @@ def logl(params, dict_data, num_Vbin):
         'Omega_bar': 0.0,
     }
 
-    density_set, V_model, sigma_model, h1_set, h2_set, h3_set, h4_set, _ = model(params_halo_pot, params_disk_rho, dict_data, num_Vbin)
+    density_set, V_model, sigma_model, h1_set, h2_set, h3_set, h4_set, _, _ = model(params_halo_pot, params_disk_rho, dict_data, num_Vbin)
     density_2DXY, y_xy, sig_xy = density_set
     h1_model, y_h1, sig_A1 = h1_set
     h2_model, y_h2, sig_A2 = h2_set
@@ -130,11 +130,11 @@ def logl(params, dict_data, num_Vbin):
     res_h3 = jnp.where(res_h3<jnp.percentile(res_h3, 98.0), res_h3, 0)
     res_h4 = jnp.where(res_h4<jnp.percentile(res_h4, 98.0), res_h4, 0)
 
-    val1 = jnp.nansum( -0.5 * res_density ) / len(density_2DXY)
-    val4 = jnp.nansum( -0.5 * res_h1 ) / len(h1_model)
-    val5 = jnp.nansum( -0.5 * res_h2 ) / len(h2_model)
-    val6 = jnp.nansum( -0.5 * res_h3 ) / len(h3_model)
-    val7 = jnp.nansum( -0.5 * res_h4 ) / len(h4_model)
+    val1 = jnp.nansum( -0.5 * res_density )
+    val4 = jnp.nansum( -0.5 * res_h1 )
+    val5 = jnp.nansum( -0.5 * res_h2 )
+    val6 = jnp.nansum( -0.5 * res_h3 )
+    val7 = jnp.nansum( -0.5 * res_h4 )
 
     log_likelihood = 0
     log_likelihood += val1 + val4 + val5 + val6 + val7
@@ -176,6 +176,9 @@ def logl_angular_input(params, dict_data, num_Vbin):
     gamma = params[9]
     log_light_to_mass_ratio = params[10]
     log_Omega_bar = params[11]
+
+    sigma_density_model = 0. #10**params[12]
+    sigma_kine_model = 10**params[12]
 
     alpha = alpha * 180 / jnp.pi
     beta = beta * 180 / jnp.pi
@@ -220,6 +223,9 @@ def logl_angular_input(params, dict_data, num_Vbin):
         'alpha': alpha,
         'beta': beta,
         'gamma': gamma,
+
+        'sigma_density_model': sigma_density_model,
+        'sigma_kine_model': sigma_kine_model,
     }
 
     surface_density_model = projection(params_baryon_rho, dict_data, num_Vbin)
@@ -233,45 +239,12 @@ def logl_angular_input(params, dict_data, num_Vbin):
     def true_func():
         return -jnp.inf
     def false_func():
-        density_set, V_model, sigma_model, h1_set, h2_set, h3_set, h4_set, _weights = model(params_halo_pot, params_baryon_rho, dict_data, num_Vbin)
+        density_set, V_model, sigma_model, h1_set, h2_set, h3_set, h4_set, _weights, _logl_marg = model(params_halo_pot, params_baryon_rho, dict_data, num_Vbin)
 
         def _true_func():
             return -jnp.inf
         def _false_func():
-            density_2DXY, y_xy, sig_xy = density_set
-            h1_model, y_h1, sig_A1 = h1_set
-            h2_model, y_h2, sig_A2 = h2_set
-            h3_model, y_h3, sig_A3 = h3_set
-            h4_model, y_h4, sig_A4 = h4_set
-
-            h3_model = jnp.where(jnp.isnan(h3_model), 0.0, h3_model)
-            h4_model = jnp.where(jnp.isnan(h4_model), 0.0, h4_model)
-            h1_data, h1_data_err = y_h1, sig_A1
-            h2_data, h2_data_err = y_h2, sig_A2
-            h3_data, h3_data_err = y_h3, sig_A3
-            h4_data, h4_data_err = y_h4, sig_A4
-
-            res_density = ((density_2DXY - y_xy) / (sig_xy + EPSILON))**2
-            res_h1 = ((h1_model - h1_data) / (h1_data_err + EPSILON))**2
-            res_h2 = ((h2_model - h2_data) / (h2_data_err + EPSILON))**2
-            res_h3 = ((h3_model - h3_data) / (h3_data_err + EPSILON))**2
-            res_h4 = ((h4_model - h4_data) / (h4_data_err + EPSILON))**2
-
-            res_h1 = jnp.where((h1_model < 9.9), res_h1, 0)
-            res_h2 = jnp.where((h2_model < 9.9), res_h2, 0)
-            res_h3 = jnp.where((h3_model < 9.9), res_h3, 0)
-            res_h4 = jnp.where((h4_model < 9.9), res_h4, 0)
-
-            val1 = jnp.nansum( -0.5 * res_density ) / len(density_2DXY)
-            val4 = jnp.nansum( -0.5 * res_h1 ) / len(h1_model)
-            val5 = jnp.nansum( -0.5 * res_h2 ) / len(h2_model)
-            val6 = jnp.nansum( -0.5 * res_h3 ) / len(h3_model)
-            val7 = jnp.nansum( -0.5 * res_h4 ) / len(h4_model)
-
-            log_likelihood = 0
-            log_likelihood += val1 + val4 + val5 + val6 + val7
-
-            return log_likelihood
+            return _logl_marg
 
         nan_in_weights = jnp.isnan(_weights).any()
         logl = jax.lax.cond(nan_in_weights, _true_func, _false_func)
