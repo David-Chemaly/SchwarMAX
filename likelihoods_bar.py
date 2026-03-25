@@ -377,8 +377,8 @@ def logl_angular_input_bootstrap(params, dict_data, num_Vbin):
     log_light_to_mass_ratio = params[10]
     log_Omega_bar = params[11]
 
-    sigma_density_model = 0.
-    sigma_kine_model = 10**params[12]
+    sigma_density_model = 0#10**params[12]
+    sigma_kine_model = 0. 
 
     alpha = alpha * 180 / jnp.pi
     beta = beta * 180 / jnp.pi
@@ -511,3 +511,300 @@ def logl_density(params, dict_data, num_Vbin, light_to_mass_ratio=1.0):
     chi2 = jnp.sum((surface_density_gt - surface_density_model)**2 / (0.1 * surface_density_gt)**2)
     logl = -0.5 * chi2 / num_Vbin
     return logl
+
+
+import pickle
+import numpy as np
+
+
+def get_dict_data(path):
+
+    with open(path + 'mock_Nbody_bar_XY_withRot.pkl', 'rb') as f:
+        bin_dict = pickle.load(f)
+
+    # voronoi binning mapping and data
+    num_per_bin = jnp.array(bin_dict['num_per_bin'])
+    total_bins = jnp.array(bin_dict['total_bins'])
+    bin_mapping = jnp.array(bin_dict['bin_mapping'])
+    surface_density = jnp.array(bin_dict['surface_density'])
+    V_data = jnp.array(bin_dict['V_mean'])
+    sigma_data = jnp.array(bin_dict['V_sigma'])
+    h1_data = jnp.array(bin_dict['h1'])
+    h2_data = jnp.array(bin_dict['h2'])
+    h3_data = jnp.array(bin_dict['h3'])
+    h4_data = jnp.array(bin_dict['h4'])
+    v0 = jnp.array(bin_dict['v0'])
+    s = jnp.array(bin_dict['s'])
+    alpha, beta, gamma = bin_dict['orientation']
+
+    # V_data_err = jnp.where(0.1 * jnp.fabs(V_data) < 10, 10, 0.1 * V_data)
+    # sigma_data_err = jnp.where(0.1 * jnp.fabs(sigma_data) < 5, 5, 0.1 * sigma_data)
+    # h1_data_err = jnp.where(0.1 * jnp.fabs(h1_data) < 0.03, 0.03, 0.1 * jnp.fabs(h1_data))
+    # h2_data_err = jnp.where(0.1 * jnp.fabs(h2_data) < 0.03, 0.03, 0.1 * jnp.fabs(h2_data))
+    # h3_data_err = jnp.where(0.1 * jnp.fabs(h3_data) < 0.03, 0.03, 0.1 * jnp.fabs(h3_data))
+    # h4_data_err = jnp.where(0.1 * jnp.fabs(h4_data) < 0.03, 0.03, 0.1 * jnp.fabs(h4_data))
+    V_data_err = jnp.array(bin_dict['V_mean_err'])
+    sigma_data_err = jnp.array(bin_dict['V_sigma_err'])
+    h1_data_err = jnp.array(bin_dict['h1_err'])
+    h2_data_err = jnp.array(bin_dict['h2_err'])
+    h3_data_err = jnp.array(bin_dict['h3_err'])
+    h4_data_err = jnp.array(bin_dict['h4_err'])
+
+    # df_Rzphi_data = pd.read_csv(path + 'mock_axisymmetric_disc_Rzphi.csv')
+    # Rzphi_density_data = jnp.array(df_Rzphi_data['mass'].to_numpy()).astype(jnp.float32)
+    with open(path + 'mock_axisymmetric_disc_Rzphi.pkl', 'rb') as f:
+        Rzphi_density_data = pickle.load(f)
+
+    R_grid, z_grid, phi_grid = Rzphi_density_data['R_grid'], Rzphi_density_data['z_grid'], Rzphi_density_data['phi_grid']
+    dR = np.unique(R_grid)[1] - np.unique(R_grid)[0]
+    dz = np.unique(z_grid)[1] - np.unique(z_grid)[0]
+    dphi = np.unique(phi_grid)[1] - np.unique(phi_grid)[0]
+    sample_for_integration = Rzphi_density_data['sample_for_integration']
+
+    from scipy.stats import qmc
+    X_regular_grid, Y_regular_grid = bin_dict['X_regular_grid'], bin_dict['Y_regular_grid']
+    dX = jnp.unique(X_regular_grid)[1] - jnp.unique(X_regular_grid)[0]
+    dY = jnp.unique(Y_regular_grid)[1] - jnp.unique(Y_regular_grid)[0]
+    sampler = qmc.Sobol(d=3, scramble=False)
+    sample = sampler.random_base2(m=10)
+
+    n_samples = 5_000  # Same number as original data
+    x_grid = np.linspace(0, 12, 1000)
+    logP_xexp = XexpX_pdf_log(x_grid, 4.0)
+    key = jax.random.PRNGKey(10086)
+    R_samples = sample_from_logP(x_grid, logP_xexp, n_samples, key)
+    phi_samples = np.random.uniform(0, 2*np.pi, size=n_samples)
+
+    x_samples, y_samples = R_samples * np.cos(phi_samples), R_samples * np.sin(phi_samples)
+
+    x_grid = np.linspace(0, 4, 1000)
+    logP_exp = expX_pdf_log(x_grid, 1.5)
+    key = jax.random.PRNGKey(10010)
+    z_samples = sample_from_logP(x_grid, logP_exp, n_samples, key)
+    w0 = np.array([
+        x_samples,
+        y_samples,
+        z_samples,
+    ]).T
+
+
+    dict_data = {
+        # 'w0': w0,
+        'v0': v0,
+        's': s,
+
+        # 'Rzphi_density_data': Rzphi_density_data,
+        'XY_density_data': surface_density,
+        'V_data': V_data,
+        'V_data_err': V_data_err,
+        'sigma_data': sigma_data,
+        'sigma_data_err': sigma_data_err,
+        'h1_data': h1_data,
+        'h1_data_err': h1_data_err,
+        'h2_data': h2_data,
+        'h2_data_err': h2_data_err,
+        'h3_data': h3_data,
+        'h3_data_err': h3_data_err,
+        'h4_data': h4_data,
+        'h4_data_err': h4_data_err,
+        'num_per_bin': num_per_bin,
+        'bin_mapping': bin_mapping,
+        'total_bins': total_bins.item(),
+
+        'R_grid': R_grid,
+        'z_grid': z_grid,
+        'phi_grid': phi_grid,
+        'dR': dR,
+        'dz': dz,
+        'dphi': dphi,
+        'sample_for_integration': sample_for_integration,
+
+        'X_regular_grid': X_regular_grid,
+        'Y_regular_grid': Y_regular_grid,
+        'dX': dX,
+        'dY': dY,
+        'sample_for_integration_XY': sample,
+
+        'w0': w0
+    }
+
+    return dict_data
+
+def get_dict_data_bootstrap(path, filename):
+
+    with open(path + filename, 'rb') as f:
+        bin_dict = pickle.load(f)
+
+    # voronoi binning mapping and data
+    num_per_bin = jnp.array(bin_dict['num_per_bin'])
+    total_bins = jnp.array(bin_dict['total_bins'])
+    bin_mapping = jnp.array(bin_dict['bin_mapping'])
+    surface_density = jnp.array(bin_dict['surface_density'])
+    V_data = jnp.array(bin_dict['V_mean'])
+    sigma_data = jnp.array(bin_dict['V_sigma'])
+    h1_data = jnp.array(bin_dict['h1'])
+    h2_data = jnp.array(bin_dict['h2'])
+    h3_data = jnp.array(bin_dict['h3'])
+    h4_data = jnp.array(bin_dict['h4'])
+    v0 = jnp.array(bin_dict['v0'])
+    s = jnp.array(bin_dict['s'])
+    alpha, beta, gamma = bin_dict['orientation']
+
+
+    XY_density_data_err = 0.01 * surface_density + EPSILON
+    V_data_err = jnp.array(bin_dict['V_mean_err'])
+    sigma_data_err = jnp.array(bin_dict['V_sigma_err'])
+    h1_data_err = jnp.array(bin_dict['h1_err'])
+    h2_data_err = jnp.array(bin_dict['h2_err'])
+    h3_data_err = jnp.array(bin_dict['h3_err'])
+    h4_data_err = jnp.array(bin_dict['h4_err'])
+
+    '''
+    Bootstrap the observation
+    '''
+    # rng = np.random.default_rng(42)
+    # N_BOOTSTRAP = 100
+    # y_xy_boot = np.array(surface_density[None, :] + rng.normal(size=(N_BOOTSTRAP, len(surface_density))) * XY_density_data_err[None, :])
+    # y_h1_boot = np.array(h1_data[None, :] + rng.normal(size=(N_BOOTSTRAP, len(h1_data))) * h1_data_err[None, :])
+    # y_h2_boot = np.array(h2_data[None, :] + rng.normal(size=(N_BOOTSTRAP, len(h2_data))) * h2_data_err[None, :])
+    # y_h3_boot = np.array(h3_data[None, :] + rng.normal(size=(N_BOOTSTRAP, len(h3_data))) * h3_data_err[None, :])
+    # y_h4_boot = np.array(h4_data[None, :] + rng.normal(size=(N_BOOTSTRAP, len(h4_data))) * h4_data_err[None, :])
+    # V_boot = np.array(V_data[None, :] + rng.normal(size=(N_BOOTSTRAP, len(V_data))) * V_data_err[None, :])
+    # sigma_boot = np.array(sigma_data[None, :] + rng.normal(size=(N_BOOTSTRAP, len(sigma_data))) * sigma_data_err[None, :])
+    # # Fix the first one to always be the unperturbed system
+    # y_xy_boot[0, :] = surface_density
+    # y_h1_boot[0, :] = h1_data
+    # y_h2_boot[0, :] = h2_data
+    # y_h3_boot[0, :] = h3_data
+    # y_h4_boot[0, :] = h4_data
+    # V_boot[0, :] = V_data
+    # sigma_boot[0, :] = sigma_data
+    # y_xy_boot = jnp.array(y_xy_boot)
+    # y_h1_boot = jnp.array(y_h1_boot)
+    # y_h2_boot = jnp.array(y_h2_boot)
+    # y_h3_boot = jnp.array(y_h3_boot)
+    # y_h4_boot = jnp.array(y_h4_boot)
+    # V_boot = jnp.array(V_boot)
+    # sigma_boot = jnp.array(sigma_boot)
+
+    rng = np.random.default_rng(42)
+    N_BOOTSTRAP = 100
+    XY_standard_normal = rng.normal(size=(N_BOOTSTRAP, len(surface_density)))
+    h1_standard_normal = rng.normal(size=(N_BOOTSTRAP, len(h1_data)))
+    h2_standard_normal = rng.normal(size=(N_BOOTSTRAP, len(h2_data)))
+    h3_standard_normal = rng.normal(size=(N_BOOTSTRAP, len(h3_data)))
+    h4_standard_normal = rng.normal(size=(N_BOOTSTRAP, len(h4_data)))
+    V_standard_normal = rng.normal(size=(N_BOOTSTRAP, len(V_data)))
+    sigma_standard_normal = rng.normal(size=(N_BOOTSTRAP, len(sigma_data)))
+    XY_standard_normal[0, :] = 0.0
+    h1_standard_normal[0, :] = 0.0
+    h2_standard_normal[0, :] = 0.0
+    h3_standard_normal[0, :] = 0.0
+    h4_standard_normal[0, :] = 0.0
+    V_standard_normal[0, :] = 0.0
+    sigma_standard_normal[0, :] = 0.0
+    XY_standard_normal = jnp.array(XY_standard_normal)
+    h1_standard_normal = jnp.array(h1_standard_normal)
+    h2_standard_normal = jnp.array(h2_standard_normal)
+    h3_standard_normal = jnp.array(h3_standard_normal)
+    h4_standard_normal = jnp.array(h4_standard_normal)
+    V_standard_normal = jnp.array(V_standard_normal)
+    sigma_standard_normal = jnp.array(sigma_standard_normal)
+
+
+
+    # df_Rzphi_data = pd.read_csv(path + 'mock_axisymmetric_disc_Rzphi.csv')
+    # Rzphi_density_data = jnp.array(df_Rzphi_data['mass'].to_numpy()).astype(jnp.float32)
+    with open(path + 'mock_axisymmetric_disc_Rzphi.pkl', 'rb') as f:
+        Rzphi_density_data = pickle.load(f)
+
+    R_grid, z_grid, phi_grid = Rzphi_density_data['R_grid'], Rzphi_density_data['z_grid'], Rzphi_density_data['phi_grid']
+    dR = np.unique(R_grid)[1] - np.unique(R_grid)[0]
+    dz = np.unique(z_grid)[1] - np.unique(z_grid)[0]
+    dphi = np.unique(phi_grid)[1] - np.unique(phi_grid)[0]
+    sample_for_integration = Rzphi_density_data['sample_for_integration']
+
+    from scipy.stats import qmc
+    X_regular_grid, Y_regular_grid = bin_dict['X_regular_grid'], bin_dict['Y_regular_grid']
+    dX = jnp.unique(X_regular_grid)[1] - jnp.unique(X_regular_grid)[0]
+    dY = jnp.unique(Y_regular_grid)[1] - jnp.unique(Y_regular_grid)[0]
+    sampler = qmc.Sobol(d=3, scramble=False)
+    sample = sampler.random_base2(m=10)
+
+    n_samples = 5_000  # Same number as original data
+    x_grid = np.linspace(0, 12, 1000)
+    logP_xexp = XexpX_pdf_log(x_grid, 4.0)
+    key = jax.random.PRNGKey(10086)
+    R_samples = sample_from_logP(x_grid, logP_xexp, n_samples, key)
+    phi_samples = np.random.uniform(0, 2*np.pi, size=n_samples)
+
+    x_samples, y_samples = R_samples * np.cos(phi_samples), R_samples * np.sin(phi_samples)
+
+    x_grid = np.linspace(0, 4, 1000)
+    logP_exp = expX_pdf_log(x_grid, 1.5)
+    key = jax.random.PRNGKey(10010)
+    z_samples = sample_from_logP(x_grid, logP_exp, n_samples, key)
+    w0 = np.array([
+        x_samples,
+        y_samples,
+        z_samples,
+    ]).T
+
+
+    dict_data = {
+        # 'w0': w0,
+        'v0': v0,
+        's': s,
+
+        # 'Rzphi_density_data': Rzphi_density_data,
+        'XY_density_data': surface_density,
+        'XY_density_data_err': XY_density_data_err,
+        'V_data': V_data,
+        'V_data_err': V_data_err,
+        'sigma_data': sigma_data,
+        'sigma_data_err': sigma_data_err,
+        'h1_data': h1_data,
+        'h1_data_err': h1_data_err,
+        'h2_data': h2_data,
+        'h2_data_err': h2_data_err,
+        'h3_data': h3_data,
+        'h3_data_err': h3_data_err,
+        'h4_data': h4_data,
+        'h4_data_err': h4_data_err,
+        'num_per_bin': num_per_bin,
+        'bin_mapping': bin_mapping,
+        'total_bins': total_bins.item(),
+
+        # 'y_xy_boot': y_xy_boot,
+        # 'y_h1_boot': y_h1_boot,
+        # 'y_h2_boot': y_h2_boot,
+        # 'y_h3_boot': y_h3_boot,
+        # 'y_h4_boot': y_h4_boot,
+        # 'V_boot': V_boot,
+        # 'sigma_boot': sigma_boot,
+        'XY_standard_normal': XY_standard_normal,
+        'h1_standard_normal': h1_standard_normal,
+        'h2_standard_normal': h2_standard_normal,
+        'h3_standard_normal': h3_standard_normal,
+        'h4_standard_normal': h4_standard_normal,
+        'V_standard_normal': V_standard_normal,
+        'sigma_standard_normal': sigma_standard_normal,
+
+        'R_grid': R_grid,
+        'z_grid': z_grid,
+        'phi_grid': phi_grid,
+        'dR': dR,
+        'dz': dz,
+        'dphi': dphi,
+        'sample_for_integration': sample_for_integration,
+
+        'X_regular_grid': X_regular_grid,
+        'Y_regular_grid': Y_regular_grid,
+        'dX': dX,
+        'dY': dY,
+        'sample_for_integration_XY': sample,
+
+        'w0': w0
+    }
+
+    return dict_data

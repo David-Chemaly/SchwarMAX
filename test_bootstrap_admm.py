@@ -34,7 +34,8 @@ with open('/Users/hanyuan/Dropbox/python_script/SchwarMAX/mock_Nbody_bar_XY_with
 v0 = jnp.array(bin_dict['v0'])
 s = jnp.array(bin_dict['s'])
 
-N_BOOTSTRAP = 500
+N_BOOTSTRAP = 100
+N_maxiter = 250
 
 # =============================== 1. Single ADMM (reference) ===============================
 print("=" * 80)
@@ -45,7 +46,7 @@ w_single = solve_nnls_admm(
     A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
     y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
     sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-    lambda_reg=1, maxiter=200,
+    lambda_reg=1, maxiter=N_maxiter,
 )
 jax.block_until_ready(w_single)
 
@@ -120,7 +121,7 @@ for noise_scale in [0.1, 0.5, 1.0, 2.0, 5.0, 10.0]:
         y_Rzphi, y_xy,
         y_xy_boot_j, y_h1_boot_j, y_h2_boot_j, y_h3_boot_j, y_h4_boot_j,
         sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-        lambda_reg=1, maxiter=200,
+        lambda_reg=1, maxiter=N_maxiter,
     )
     jax.block_until_ready(w_all)
 

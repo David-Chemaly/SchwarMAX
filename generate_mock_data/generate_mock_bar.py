@@ -1,5 +1,11 @@
+path = '/Users/hanyuan/Dropbox/python_script/SchwarMAX/'
+# path = '/home/hz420/python_script/SchwarMAX/'
+
+data_folder = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data'
+# sim_folder = '/data/hz420-2/SchwarMAX/Bar_model_TG21/model'
+
 import sys
-sys.path.append('/home/hz420/python_script/SchwarMAX/')
+sys.path.append(path)
 
 import numpy as np
 import scipy as sp
@@ -26,7 +32,6 @@ agama.setUnits(length=1, velocity=1, mass=1)
 from astropy.constants import G
 import astropy.units as u
 
-path = '/home/hz420/python_script/SchwarMAX/'
 # Load data
 import numpy as np
 from powerbin import PowerBin
@@ -98,14 +103,13 @@ def rotate(posvel, angle):
     sina, cosa = np.sin(angle), np.cos(angle)
     return np.array([x*cosa-y*sina, x*sina+y*cosa, z, vx*cosa-vy*sina, vx*sina+vy*cosa, vz]).T
 
-
 # with open('/data/hz420-2/SchwarMAX/mock_axisymmetric_disc.pkl', 'rb') as f:
 #     data = pickle.load(f)
 # w0_data = np.array([data['x'], data['y'], data['z'], data['vx'], data['vy'], data['vz']]).T
 # mass_data = data['mass']
 
 mass_unit = 1/((G*u.Msun).to(u.kpc*(u.km/u.s)**2))
-w0_data, mass_data = agama.readSnapshot(f'/data/hz420-2/SchwarMAX/Bar_model_TG21/model/t_t0_7')#snap_t0_3
+w0_data, mass_data = agama.readSnapshot(data_folder+'/Bar_model_TG21/model/t_t0_4')#snap_t0_3
 mass_data = mass_data * mass_unit.value
 
 mask = (mass_data!=np.unique(mass_data)[-1])
@@ -221,7 +225,7 @@ XY_coords = XY_coords[mask]
 signal = signal[mask]
 noise = noise[mask]
 
-target_sn = 40
+target_sn = 30
 def capacity_spec(index):
     """Calculates (S/N)^2 for a bin from its pixel indices."""
     # Standard S/N formula for uncorrelated noise
@@ -386,7 +390,7 @@ cb7 = ax1[0,3].scatter(df_XY_merged['X_grid'], df_XY_merged['Y_grid'], c= v0[df_
 fig1.colorbar(cb7, ax=ax1[0,3], label='v0')
 ax1[0,3].set_title('v0')
 
-fig1.savefig('/data/hz420-2/SchwarMAX/plots/mock_Nbody_bar_XY_withRot_2.png', bbox_inches='tight')
+fig1.savefig(data_folder+'/plots/mock_Nbody_bar_XY_withRot_Nbins1000.png', bbox_inches='tight')
 
 for i in range (0,2):
     for j in range (0,4):
@@ -489,7 +493,7 @@ fig1.colorbar(cb7, ax=ax1[0,3], label='s')
 ax1[0,3].set_title('s')
 
 
-with open(path + 'mock_Nbody_bar_XY_withRot_2.pkl', 'wb') as f:
+with open(path + 'mock_Nbody_bar_XY_withRot_Nbins1000.pkl', 'wb') as f:
     pickle.dump(bin_dict, f)
 
 plt.show()

@@ -803,10 +803,14 @@ def compute_model_and_logl_bootstrap(
         res_h2 = jnp.where(h2_model < 9.9, ((h2_model - y_h2_i) / (sig_A2 + EPSILON))**2, 0)
         res_h3 = jnp.where(h3_model < 9.9, ((h3_model - y_h3_i) / (sig_A3 + EPSILON))**2, 0)
         res_h4 = jnp.where(h4_model < 9.9, ((h4_model - y_h4_i) / (sig_A4 + EPSILON))**2, 0)
-        logl = -0.5 * (jnp.nansum(res_density) + jnp.nansum(res_h1) + jnp.nansum(res_h2) +
-                       jnp.nansum(res_h3) + jnp.nansum(res_h4)) - (jnp.sum(jnp.log(sig_xy)) +
-                        jnp.sum(jnp.log(sig_A1)) + jnp.sum(jnp.log(sig_A2)) +
-                        jnp.sum(jnp.log(sig_A3)) + jnp.sum(jnp.log(sig_A4)))
+        # logl = -0.5 * (jnp.nansum(res_density) + jnp.nansum(res_h1) + jnp.nansum(res_h2) +
+        #                jnp.nansum(res_h3) + jnp.nansum(res_h4)) - (jnp.sum(jnp.log(sig_xy)) +
+        #                 jnp.sum(jnp.log(sig_A1)) + jnp.sum(jnp.log(sig_A2)) +
+        #                 jnp.sum(jnp.log(sig_A3)) + jnp.sum(jnp.log(sig_A4)))
+        logl = -0.5 * (jnp.nansum(res_h1) + jnp.nansum(res_h2) +
+                       jnp.nansum(res_h3) + jnp.nansum(res_h4))# - (
+                        # jnp.sum(jnp.log(sig_A1)) + jnp.sum(jnp.log(sig_A2)) +
+                        # jnp.sum(jnp.log(sig_A3)) + jnp.sum(jnp.log(sig_A4)))
 
         V_model, sigma_model = h_to_V_sigma(h1_model, h2_model, v0, s)
         return logl, density_2DXY, h1_model, h2_model, h3_model, h4_model, V_model, sigma_model
@@ -816,8 +820,8 @@ def compute_model_and_logl_bootstrap(
 
     # Log-mean-exp
     logl_max = jnp.max(logl_all)
-    # logl_marg = logl_max + jnp.log(jnp.mean(jnp.exp(logl_all - logl_max)))
-    logl_marg = jnp.mean(logl_all)
+    logl_marg = logl_max + jnp.log(jnp.mean(jnp.exp(logl_all - logl_max)))
+    # logl_marg = jnp.mean(logl_all)
 
     # Penalty for model flexibility
     delta_XY_boot = density_all - density_all[0, :]
@@ -1060,9 +1064,10 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     res_h2 = jnp.where(h2_model < 9.9, ((h2_model - y_h2) / (sig_A2 + EPSILON))**2, 0)
     res_h3 = jnp.where(h3_model < 9.9, ((h3_model - y_h3) / (sig_A3 + EPSILON))**2, 0)
     res_h4 = jnp.where(h4_model < 9.9, ((h4_model - y_h4) / (sig_A4 + EPSILON))**2, 0)
-    logl_best = -0.5 * (jnp.nansum(res_density) +
+    logl_best = -0.5 * (#jnp.nansum(res_density) +
                         jnp.nansum(res_h1) + jnp.nansum(res_h2) +
-                        jnp.nansum(res_h3) + jnp.nansum(res_h4)) - (jnp.sum(jnp.log(sig_xy)) +
+                        jnp.nansum(res_h3) + jnp.nansum(res_h4)) - (
+                        #jnp.sum(jnp.log(sig_xy)) +
                         jnp.sum(jnp.log(sig_A1)) + jnp.sum(jnp.log(sig_A2)) +
                         jnp.sum(jnp.log(sig_A3)) + jnp.sum(jnp.log(sig_A4)))
 
@@ -1234,6 +1239,10 @@ def model_bootstrap(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     y_xy = dict_data['XY_density_data'].astype(jnp.float32)
 
     y_xy = y_xy / params_disk_rho['light_to_mass_ratio']
+    y_h1 = dict_data['h1_data']
+    y_h2 = dict_data['h2_data']
+    y_h3 = dict_data['h3_data']
+    y_h4 = dict_data['h4_data']
 
     sig_Rzphi = 0.02 * y_Rzphi + 1e-10
     sig_xy = (dict_data['XY_density_data_err'] + EPSILON) / params_disk_rho['light_to_mass_ratio']
@@ -1257,22 +1266,28 @@ def model_bootstrap(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
 
     #=========================================== Bootstrap NNLS solver (vmapped) ============================================
 
-    # Bootstrapped observations: (N_boot, n_bins) — pre-computed and stored in dict_data
-    # y_xy_boot is in luminosity units (same as XY_density_data), divided here by
-    # light_to_mass_ratio and mean_mass_per_orb to match the original y_xy processing.
-    # y_Rzphi is NOT bootstrapped (it's model-computed from density params)
-    y_xy_boot = dict_data['y_xy_boot'] / params_disk_rho['light_to_mass_ratio'] / mean_mass_per_orb  # (N_boot, n_xy_bins)
-    y_h1_boot = dict_data['y_h1_boot']                               # (N_boot, n_xy_bins)
-    y_h2_boot = dict_data['y_h2_boot']
-    y_h3_boot = dict_data['y_h3_boot']
-    y_h4_boot = dict_data['y_h4_boot']
+    # # Bootstrapped observations: (N_boot, n_bins) — pre-computed and stored in dict_data
+    # # y_xy_boot is in luminosity units (same as XY_density_data), divided here by
+    # # light_to_mass_ratio and mean_mass_per_orb to match the original y_xy processing.
+    # # y_Rzphi is NOT bootstrapped (it's model-computed from density params)
+    # y_xy_boot = dict_data['y_xy_boot'] / params_disk_rho['light_to_mass_ratio'] / mean_mass_per_orb  # (N_boot, n_xy_bins)
+    # y_h1_boot = dict_data['y_h1_boot']                               # (N_boot, n_xy_bins)
+    # y_h2_boot = dict_data['y_h2_boot']
+    # y_h3_boot = dict_data['y_h3_boot']
+    # y_h4_boot = dict_data['y_h4_boot']
+
+    y_xy_boot = y_xy[None, :] + dict_data['XY_standard_normal'] * sig_xy[None, :]
+    y_h1_boot = y_h1[None, :] + dict_data['h1_standard_normal'] * sig_A1[None, :]
+    y_h2_boot = y_h2[None, :] + dict_data['h2_standard_normal'] * sig_A2[None, :]
+    y_h3_boot = y_h3[None, :] + dict_data['h3_standard_normal'] * sig_A3[None, :]
+    y_h4_boot = y_h4[None, :] + dict_data['h4_standard_normal'] * sig_A4[None, :]
 
     weights_all = solve_nnls_admm_bootstrap(
                             A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
                             y_Rzphi, y_xy,
                             y_xy_boot, y_h1_boot, y_h2_boot, y_h3_boot, y_h4_boot,
                             sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-                            lambda_reg=1, maxiter=200,
+                            lambda_reg=1, maxiter=250,
     )  # (N_boot, n_orb)
 
     #===================================== Compute model vectors + logL for each bootstrap ==================================
@@ -1608,7 +1623,7 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
         _z
     )
 
-    n_realizations = 4
+    n_realizations = 2
     key = jax.random.PRNGKey(911)
     keys = jax.random.split(key, 6)
     d_scale = 0.1 * jnp.ones(_R.shape)
