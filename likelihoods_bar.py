@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import jax.numpy.linalg as jnn
 
 from constants import EPSILON
-from model_bar import model, model_marg, model_bootstrap, projection, density_func
+from model_bar import model, model_marg, model_bootstrap, projection, density_func, model_test_convergence
 from functools import partial
 
 from utils import *
@@ -441,6 +441,193 @@ def logl_angular_input_bootstrap(params, dict_data, num_Vbin):
     def false_func():
         weights_all, _logl_marg, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_all, _m_eff = \
             model_bootstrap(params_halo_pot, params_baryon_rho, dict_data, num_Vbin)
+
+        def _true_func():
+            return -jnp.inf
+        def _false_func():
+            return _logl_marg# - _m_eff
+
+        nan_in_weights = jnp.isnan(weights_all).any()
+        logl = jax.lax.cond(nan_in_weights, _true_func, _false_func)
+        return logl
+
+    val = jax.lax.cond(logl_density < logl_density_max - 1000, true_func, false_func)
+    return val
+
+@partial(jax.jit, static_argnames=('num_Vbin'))
+def logl_angular_input_bootstrap_with_maps(params, dict_data, num_Vbin):
+    """
+    Same as logl_angular_input but uses model_bootstrap() which marginalizes
+    logL over observational noise via bootstrap resampling:
+        - 100 perturbed observation vectors y_i = y + N(0, sig)
+        - Shared Cholesky, vmapped ADMM solves
+        - logL_marg = log(mean(exp(logL_i)))
+    """
+
+    logM_halo = params[0]
+    logM_disc = params[1]
+    logM_bar = params[2]
+    logRs_halo = params[3]
+    logRs_disk = params[4]
+    logHs_disk = params[5]
+    logL_bar = params[6]
+    alpha = params[7]
+    beta = params[8]
+    gamma = params[9]
+    log_light_to_mass_ratio = params[10]
+    log_Omega_bar = params[11]
+
+    sigma_density_model = 0#10**params[12]
+    sigma_kine_model = 0. 
+
+    alpha = alpha * 180 / jnp.pi
+    beta = beta * 180 / jnp.pi
+    gamma = gamma * 180 / jnp.pi
+
+    # Derived bar parameters
+    L_bar = 10.0 ** logL_bar
+    a_bar = L_bar / 5.0
+    Hs_disc = 10.0 ** logHs_disk
+    b_bar = Hs_disc
+
+    params_halo_pot = {
+        'logM': logM_halo,
+        'Rs':10 ** logRs_halo,
+        'a':1.0,
+        'b':1.0,
+        'c':1.0,
+        'x_origin':0.0,
+        'y_origin':0.0,
+        'z_origin':0.0,
+        'dirx':0.0,
+        'diry':0.0,
+        'dirz':1.0
+    }
+
+    params_baryon_rho = {
+        'logM_disc': logM_disc,
+        'Rs_disc': 10 ** logRs_disk,
+        'Hs_disc': Hs_disc,
+        'logM_bar': logM_bar,
+        'L_bar': L_bar,
+        'a_bar': a_bar,
+        'b_bar': b_bar,
+        'light_to_mass_ratio': 10 ** log_light_to_mass_ratio,
+        'Omega_bar': 10 ** log_Omega_bar,
+        'x_origin': 0.0,
+        'y_origin': 0.0,
+        'z_origin': 0.0,
+        'dirx': 0.0,
+        'diry': 0.0,
+        'dirz': 1.0,
+        'alpha': alpha,
+        'beta': beta,
+        'gamma': gamma,
+
+        'sigma_density_model': sigma_density_model,
+        'sigma_kine_model': sigma_kine_model,
+    }
+
+    surface_density_model = projection(params_baryon_rho, dict_data, num_Vbin)
+    surface_density_gt = dict_data['XY_density_data'] / params_baryon_rho['light_to_mass_ratio']
+
+    chi2 = jnp.sum((surface_density_gt - surface_density_model)**2 / (0.1 * surface_density_gt)**2)
+    logl_density = -0.5 * chi2 / num_Vbin
+
+    weights_all, _logl_marg, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_all, _m_eff = \
+        model_bootstrap(params_halo_pot, params_baryon_rho, dict_data, num_Vbin)
+    
+    return weights_all, _logl_marg, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_all, _m_eff, logl_density
+
+
+
+@partial(jax.jit, static_argnames=('num_Vbin', 'N_max_integration'))
+def logl_angular_input_bootstrap_test(params, dict_data, num_Vbin, N_max_integration):
+    """
+    Same as logl_angular_input but uses model_bootstrap() which marginalizes
+    logL over observational noise via bootstrap resampling:
+        - 100 perturbed observation vectors y_i = y + N(0, sig)
+        - Shared Cholesky, vmapped ADMM solves
+        - logL_marg = log(mean(exp(logL_i)))
+    """
+
+    logM_halo = params[0]
+    logM_disc = params[1]
+    logM_bar = params[2]
+    logRs_halo = params[3]
+    logRs_disk = params[4]
+    logHs_disk = params[5]
+    logL_bar = params[6]
+    alpha = params[7]
+    beta = params[8]
+    gamma = params[9]
+    log_light_to_mass_ratio = params[10]
+    log_Omega_bar = params[11]
+
+    sigma_density_model = 0#10**params[12]
+    sigma_kine_model = 0. 
+
+    alpha = alpha * 180 / jnp.pi
+    beta = beta * 180 / jnp.pi
+    gamma = gamma * 180 / jnp.pi
+
+    # Derived bar parameters
+    L_bar = 10.0 ** logL_bar
+    a_bar = L_bar / 5.0
+    Hs_disc = 10.0 ** logHs_disk
+    b_bar = Hs_disc
+
+    params_halo_pot = {
+        'logM': logM_halo,
+        'Rs':10 ** logRs_halo,
+        'a':1.0,
+        'b':1.0,
+        'c':1.0,
+        'x_origin':0.0,
+        'y_origin':0.0,
+        'z_origin':0.0,
+        'dirx':0.0,
+        'diry':0.0,
+        'dirz':1.0
+    }
+
+    params_baryon_rho = {
+        'logM_disc': logM_disc,
+        'Rs_disc': 10 ** logRs_disk,
+        'Hs_disc': Hs_disc,
+        'logM_bar': logM_bar,
+        'L_bar': L_bar,
+        'a_bar': a_bar,
+        'b_bar': b_bar,
+        'light_to_mass_ratio': 10 ** log_light_to_mass_ratio,
+        'Omega_bar': 10 ** log_Omega_bar,
+        'x_origin': 0.0,
+        'y_origin': 0.0,
+        'z_origin': 0.0,
+        'dirx': 0.0,
+        'diry': 0.0,
+        'dirz': 1.0,
+        'alpha': alpha,
+        'beta': beta,
+        'gamma': gamma,
+
+        'sigma_density_model': sigma_density_model,
+        'sigma_kine_model': sigma_kine_model,
+    }
+
+    surface_density_model = projection(params_baryon_rho, dict_data, num_Vbin)
+    surface_density_gt = dict_data['XY_density_data'] / params_baryon_rho['light_to_mass_ratio']
+
+    chi2 = jnp.sum((surface_density_gt - surface_density_model)**2 / (0.1 * surface_density_gt)**2)
+    logl_density = -0.5 * chi2 / num_Vbin
+
+    logl_density_max = dict_data['logl_density_max']
+
+    def true_func():
+        return -jnp.inf
+    def false_func():
+        weights_all, _logl_marg, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_all, _m_eff = \
+            model_test_convergence(params_halo_pot, params_baryon_rho, dict_data, num_Vbin, N_max_integration)
 
         def _true_func():
             return -jnp.inf
