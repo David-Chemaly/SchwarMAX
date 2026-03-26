@@ -445,7 +445,7 @@ def logl_angular_input_bootstrap(params, dict_data, num_Vbin):
         def _true_func():
             return -jnp.inf
         def _false_func():
-            return _logl_marg# - _m_eff
+            return _logl_marg - _m_eff
 
         nan_in_weights = jnp.isnan(weights_all).any()
         logl = jax.lax.cond(nan_in_weights, _true_func, _false_func)
@@ -817,7 +817,7 @@ def get_dict_data(path):
 
     return dict_data
 
-def get_dict_data_bootstrap(path, filename):
+def get_dict_data_bootstrap(path, filename, N_BOOTSTRAP = 100):
 
     with open(path + filename, 'rb') as f:
         bin_dict = pickle.load(f)
@@ -875,7 +875,6 @@ def get_dict_data_bootstrap(path, filename):
     # sigma_boot = jnp.array(sigma_boot)
 
     rng = np.random.default_rng(42)
-    N_BOOTSTRAP = 100
     XY_standard_normal = rng.normal(size=(N_BOOTSTRAP, len(surface_density)))
     h1_standard_normal = rng.normal(size=(N_BOOTSTRAP, len(h1_data)))
     h2_standard_normal = rng.normal(size=(N_BOOTSTRAP, len(h2_data)))

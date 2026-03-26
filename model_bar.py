@@ -803,14 +803,14 @@ def compute_model_and_logl_bootstrap(
         res_h2 = jnp.where(h2_model < 9.9, ((h2_model - y_h2_i) / (sig_A2 + EPSILON))**2, 0)
         res_h3 = jnp.where(h3_model < 9.9, ((h3_model - y_h3_i) / (sig_A3 + EPSILON))**2, 0)
         res_h4 = jnp.where(h4_model < 9.9, ((h4_model - y_h4_i) / (sig_A4 + EPSILON))**2, 0)
-        # logl = -0.5 * (jnp.nansum(res_density) + jnp.nansum(res_h1) + jnp.nansum(res_h2) +
-        #                jnp.nansum(res_h3) + jnp.nansum(res_h4)) - (jnp.sum(jnp.log(sig_xy)) +
-        #                 jnp.sum(jnp.log(sig_A1)) + jnp.sum(jnp.log(sig_A2)) +
-        #                 jnp.sum(jnp.log(sig_A3)) + jnp.sum(jnp.log(sig_A4)))
-        logl = -0.5 * (jnp.nansum(res_h1) + jnp.nansum(res_h2) +
-                       jnp.nansum(res_h3) + jnp.nansum(res_h4))# - (
-                        # jnp.sum(jnp.log(sig_A1)) + jnp.sum(jnp.log(sig_A2)) +
-                        # jnp.sum(jnp.log(sig_A3)) + jnp.sum(jnp.log(sig_A4)))
+        logl = -0.5 * (jnp.nansum(res_density) + jnp.nansum(res_h1) + jnp.nansum(res_h2) +
+                       jnp.nansum(res_h3) + jnp.nansum(res_h4)) - (jnp.sum(jnp.log(sig_xy)) +
+                        jnp.sum(jnp.log(sig_A1)) + jnp.sum(jnp.log(sig_A2)) +
+                        jnp.sum(jnp.log(sig_A3)) + jnp.sum(jnp.log(sig_A4)))
+        # logl = -0.5 * (jnp.nansum(res_h1) + jnp.nansum(res_h2) +
+        #                jnp.nansum(res_h3) + jnp.nansum(res_h4))# - (
+        #                 # jnp.sum(jnp.log(sig_A1)) + jnp.sum(jnp.log(sig_A2)) +
+        #                 # jnp.sum(jnp.log(sig_A3)) + jnp.sum(jnp.log(sig_A4)))
 
         V_model, sigma_model = h_to_V_sigma(h1_model, h2_model, v0, s)
         return logl, density_2DXY, h1_model, h2_model, h3_model, h4_model, V_model, sigma_model
@@ -1301,6 +1301,7 @@ def model_bootstrap(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
             sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
             v0, s,
         )
+    density_all = density_all * mean_mass_per_orb * params_disk_rho['light_to_mass_ratio']  # convert back to luminosity units for density
 
     return weights_all, logl_marg, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_all, m_eff
 

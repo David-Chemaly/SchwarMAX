@@ -823,9 +823,13 @@ def compute_model_and_logl_bootstrap(
         res_h3 = jnp.where(h3_model < 9.9, ((h3_model - y_h3_i) / (sig_A3 + EPSILON))**2, 0)
         res_h4 = jnp.where(h4_model < 9.9, ((h4_model - y_h4_i) / (sig_A4 + EPSILON))**2, 0)
         logl = -0.5 * (jnp.nansum(res_density) + jnp.nansum(res_h1) + jnp.nansum(res_h2) +
-                       jnp.nansum(res_h3) + jnp.nansum(res_h4)) - (jnp.sum(jnp.log(sig_xy)) +
-                        jnp.sum(jnp.log(sig_A1)) + jnp.sum(jnp.log(sig_A2)) +
-                        jnp.sum(jnp.log(sig_A3)) + jnp.sum(jnp.log(sig_A4)))
+                       jnp.nansum(res_h3) + jnp.nansum(res_h4))# - (jnp.sum(jnp.log(sig_xy)) +
+                        # jnp.sum(jnp.log(sig_A1)) + jnp.sum(jnp.log(sig_A2)) +
+                        # jnp.sum(jnp.log(sig_A3)) + jnp.sum(jnp.log(sig_A4)))
+        # logl = -0.5 * (jnp.nansum(res_h1) + jnp.nansum(res_h2) +
+        #                jnp.nansum(res_h3) + jnp.nansum(res_h4))# - (
+        #                 # jnp.sum(jnp.log(sig_A1)) + jnp.sum(jnp.log(sig_A2)) +
+        #                 # jnp.sum(jnp.log(sig_A3)) + jnp.sum(jnp.log(sig_A4)))
 
         V_model, sigma_model = h_to_V_sigma(h1_model, h2_model, v0, s)
         return logl, density_2DXY, h1_model, h2_model, h3_model, h4_model, V_model, sigma_model
