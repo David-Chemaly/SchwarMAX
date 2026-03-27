@@ -804,9 +804,9 @@ def compute_model_and_logl_bootstrap(
         res_h3 = jnp.where(h3_model < 9.9, ((h3_model - y_h3_i) / (sig_A3 + EPSILON))**2, 0)
         res_h4 = jnp.where(h4_model < 9.9, ((h4_model - y_h4_i) / (sig_A4 + EPSILON))**2, 0)
         logl = -0.5 * (jnp.nansum(res_density) + jnp.nansum(res_h1) + jnp.nansum(res_h2) +
-                       jnp.nansum(res_h3) + jnp.nansum(res_h4)) - (jnp.sum(jnp.log(sig_xy)) +
-                        jnp.sum(jnp.log(sig_A1)) + jnp.sum(jnp.log(sig_A2)) +
-                        jnp.sum(jnp.log(sig_A3)) + jnp.sum(jnp.log(sig_A4)))
+                       jnp.nansum(res_h3) + jnp.nansum(res_h4))# - (jnp.sum(jnp.log(sig_xy)) +
+                        # jnp.sum(jnp.log(sig_A1)) + jnp.sum(jnp.log(sig_A2)) +
+                        # jnp.sum(jnp.log(sig_A3)) + jnp.sum(jnp.log(sig_A4)))
         # logl = -0.5 * (jnp.nansum(res_h1) + jnp.nansum(res_h2) +
         #                jnp.nansum(res_h3) + jnp.nansum(res_h4))# - (
         #                 # jnp.sum(jnp.log(sig_A1)) + jnp.sum(jnp.log(sig_A2)) +
@@ -1287,7 +1287,7 @@ def model_bootstrap(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
                             y_Rzphi, y_xy,
                             y_xy_boot, y_h1_boot, y_h2_boot, y_h3_boot, y_h4_boot,
                             sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-                            lambda_reg=1, maxiter=250,
+                            lambda_reg=1, maxiter=200,
     )  # (N_boot, n_orb)
 
     #===================================== Compute model vectors + logL for each bootstrap ==================================

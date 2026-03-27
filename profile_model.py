@@ -7,11 +7,49 @@ Run on GPU for meaningful results (JAX will JIT-compile on first call).
 Usage:
     python profile_model.py
 """
-import sys
-import time
-import numpy as np
 
-path = '/Users/hanyuan/Dropbox/python_script/SchwarMAX/'
+from google.colab import drive
+drive.mount('/content/drive')
+
+# ! pip install numpyro
+# # ! pip install jax_cosmo
+# ! pip install arviz
+! pip install jaxopt
+! pip install corner
+! pip install emcee
+
+path = '/content/drive/MyDrive/SchwarMAX-analytic/'
+
+import sys
+sys.path.append(path)
+
+from model_bar import *
+from likelihoods_bar import *
+from utils import *
+from sample_from_density import sample_from_density_grid
+
+import os
+# os.environ["JAX_ENABLE_X64"] = "True"
+
+import jax
+# jax.config.update("jax_enable_x64", True)
+import jax.numpy as jnp
+import jax.numpy.linalg as jnn
+import jax.scipy.optimize as jso
+import pandas as pd
+import numpy as np
+import scipy as sp
+import pickle
+
+import emcee
+import corner
+import matplotlib.pyplot as plt
+
+from constants import EPSILON
+
+
+
+path = '/content/drive/MyDrive/SchwarMAX-analytic/'
 sys.path.append(path)
 
 import jax
@@ -71,7 +109,7 @@ from model_bar import model_bootstrap
 result = model_bootstrap(params_halo_pot, params_disk_rho, dict_data, num_Vbin)
 jax.block_until_ready(result)
 t_warmup = time.time() - t0
-print(f"Warmup: {t_warmup:.1f}s")
+print(f"Warmup: {t_warmup:.1f}s", 'logL = ', result[1])
 
 # ============================================================
 # Full call timing (post-JIT)
