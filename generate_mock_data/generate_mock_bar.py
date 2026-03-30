@@ -109,7 +109,7 @@ def rotate(posvel, angle):
 # mass_data = data['mass']
 
 mass_unit = 1/((G*u.Msun).to(u.kpc*(u.km/u.s)**2))
-w0_data, mass_data = agama.readSnapshot(data_folder+'/Bar_model_TG21/model/t_t0_4')#snap_t0_3
+w0_data, mass_data = agama.readSnapshot(data_folder+'/Bar_model_TG21/model/t_t0_7')#snap_t0_3
 mass_data = mass_data * mass_unit.value
 
 mask = (mass_data!=np.unique(mass_data)[-1])
@@ -390,7 +390,7 @@ cb7 = ax1[0,3].scatter(df_XY_merged['X_grid'], df_XY_merged['Y_grid'], c= v0[df_
 fig1.colorbar(cb7, ax=ax1[0,3], label='v0')
 ax1[0,3].set_title('v0')
 
-fig1.savefig(data_folder+'/plots/mock_Nbody_bar_XY_withRot_Nbins1000.png', bbox_inches='tight')
+fig1.savefig(data_folder+'/plots/mock_Nbody_bar_XY_withRot_gal2_Nbins1000.png', bbox_inches='tight')
 
 for i in range (0,2):
     for j in range (0,4):
@@ -493,7 +493,7 @@ fig1.colorbar(cb7, ax=ax1[0,3], label='s')
 ax1[0,3].set_title('s')
 
 
-with open(path + 'mock_Nbody_bar_XY_withRot_Nbins1000.pkl', 'wb') as f:
+with open(path + 'mock_Nbody_bar_XY_withRot_gal2_Nbins1000.pkl', 'wb') as f:
     pickle.dump(bin_dict, f)
 
 plt.show()

@@ -29,8 +29,8 @@ from CylindricalSpline_particles import get_phi_m_from_agama
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-snapshot_path = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data/Bar_model_TG21/model/t_t0_4'
-output_path = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data/Bar_model_TG21/dict_phi_stellar_t_t0_4.pkl'
+snapshot_path = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data/Bar_model_TG21/model/t_t0_7'
+output_path = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data/Bar_model_TG21/dict_phi_stellar_t_t0_7.pkl'
 
 # Grid parameters
 NR, NZ = 50, 30

@@ -445,13 +445,13 @@ def logl_angular_input_bootstrap(params, dict_data, num_Vbin):
         def _true_func():
             return -jnp.inf
         def _false_func():
-            return _logl_marg# - _m_eff
+            return _logl_marg - _m_eff
 
         nan_in_weights = jnp.isnan(weights_all).any()
         logl = jax.lax.cond(nan_in_weights, _true_func, _false_func)
         return logl
 
-    val = jax.lax.cond(logl_density < logl_density_max - 1000, true_func, false_func)
+    val = jax.lax.cond(logl_density < logl_density_max - 100, true_func, false_func)
     return val
 
 @partial(jax.jit, static_argnames=('num_Vbin'))

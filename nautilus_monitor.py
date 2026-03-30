@@ -86,7 +86,7 @@ try:
         print(f"N_eff = {n_eff:.1f} — not converged yet.")
         print(f"Best logL: {np.max(log_l):.2f}")
         top_idx = np.argsort(log_l)[-10:][::-1]
-        n_show = min(7, ndim)
+        n_show = min(13, ndim)
         print(f"\nTop 10 by logL:")
         print(f"  {'logL':>12} | {' | '.join(f'{n:>10}' for n in param_names[:n_show])}")
         for idx in top_idx:
