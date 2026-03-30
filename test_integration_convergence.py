@@ -7,7 +7,7 @@ agama.setUnits(mass=1, length=1, velocity=1)
 
 from constants import *
 from integrants_with_binning import (
-    _integrate_adaptive_batch_vmap, _integrate_adaptive_vmap
+    _integrate_adaptive_batch_vmap, _integrate_adaptive_vmap, _integrate_adaptive_chunked_vmap
 )
 from sample_from_density import sample_from_density_grid
 from densities import *
@@ -428,14 +428,25 @@ xy_n_grid = jnp.array([60,40])
 Rzphi_n_tot = 360
 
 N_step_per_orb = 100
-N_dynamical_time = 100
+N_dynamical_time = 50
 N_max = N_step_per_orb * N_dynamical_time
 T_total = T_orb * N_dynamical_time
 dt_init = T_orb / N_step_per_orb
 atol, rtol = 1e-7, 1e-4
 dt_min, dt_max = 1e-5, 0.3
 
-Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid, _, t_total = _integrate_adaptive_vmap(
+time_start = time.time()
+# Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid, _, t_total = _integrate_adaptive_vmap(
+#                     w0_new, acc_fn, pot_fn, N_max, T_total,
+#                     dt_init, -Omega_bar,
+#                     atol, rtol,
+#                     dt_min, dt_max,
+#                     num_Vbin, bin_mapping, num_per_bin,
+#                     Rzphi_lim_grid, xy_lim_grid,
+#                     Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
+#                     v0, s, rotation_matrix)
+_integrate_adaptive_chunked_vmap
+Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid, _, t_total = _integrate_adaptive_chunked_vmap(
                     w0_new, acc_fn, pot_fn, N_max, T_total,
                     dt_init, -Omega_bar,
                     atol, rtol,
@@ -443,15 +454,17 @@ Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid, _, t_total = _integrat
                     num_Vbin, bin_mapping, num_per_bin,
                     Rzphi_lim_grid, xy_lim_grid,
                     Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
-                    v0, s, rotation_matrix)
+                    v0, s, rotation_matrix,
+                    5000)
 A_Rzphi = Rzphi_bin_counts.T
 A_xy = surface_density.T
 A_h1 = h1.T
 A_h2 = h2.T
 A_h3 = h3.T
 A_h4 = h4.T
-
+Rzphi_bin_counts.block_until_ready()
 print("Number of valid orbits:", jnp.sum(valid))
+print("Integration time:", time.time() - time_start, "seconds")
 
 @jax.jit
 def density_func_Rz(R, z, phi, params):
@@ -499,7 +512,7 @@ y_Rzphi = y_Rzphi / mean_mass_per_orb
 sig_Rzphi = sig_Rzphi / mean_mass_per_orb
 
 path_data = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data/'
-with open(path_data + 'orbital_library_adaptive_Nmax1e4.pkl', 'wb') as f:
+with open(path_data + 'orbital_library_adaptive_Nmax5e3_Chunk5000.pkl', 'wb') as f:
     orb_lib = (A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4, \
         y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4, \
         sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4, t_total/T_orb)

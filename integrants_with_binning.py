@@ -1228,6 +1228,271 @@ _integrate_adaptive_vmap = jax.vmap(integrate_adaptive_barred,
                             None, None, None))
 
 
+# ==========================================================================
+# Chunked adaptive integrator: bins every chunk_size steps (vectorized).
+# Memory: O(chunk_size * 6) per orbit instead of O(N_max * 6).
+# ==========================================================================
+@partial(jax.jit, static_argnames=('acc_fn', 'pot_fn', 'N_max', 'chunk_size', 'num_Vbin', 'num_segments_Rzphi'))
+def integrate_adaptive_barred_chunked(
+    w0, acc_fn, pot_fn, N_max, T_total,
+    dt_init=0.010, Omega=0.0,
+    atol=1e-8, rtol=1e-6,
+    dt_min=1e-5, dt_max=0.1,
+    num_Vbin=1028, bin_mapping=jnp.zeros(2400, dtype=jnp.int32),
+    num_per_bin=jnp.zeros(1028, dtype=jnp.int32),
+    Rzphi_minmax=jnp.array([[0, 10.], [-3, 3], [-jnp.pi, jnp.pi]]),
+    XY_minmax=jnp.array([[-10., 10.], [-2., 2.]]),
+    nRzphi=jnp.array([10, 6, 6]), nXY=jnp.array([40, 30]),
+    num_segments_Rzphi=360,
+    v0=jnp.zeros(1028), s=jnp.ones(1028) * 5.0,
+    rotation_matrix=jnp.eye(3),
+    chunk_size=500,
+):
+    """Adaptive BS2(3) integrator with chunked binning.
+
+    Same physics as integrate_adaptive_barred, but instead of storing the full
+    (N_max, 6) trajectory and binning at the end, it processes the orbit in
+    chunks of `chunk_size` steps: each chunk stores a small (chunk_size, 6)
+    trajectory buffer, bins it vectorially, and accumulates into running sums.
+
+    Memory per orbit: O(chunk_size * 6 + num_Vbin + num_segments_Rzphi)
+    instead of O(N_max * 6 + num_Vbin + num_segments_Rzphi).
+
+    N_max must be divisible by chunk_size.
+    """
+    n_chunks = N_max // chunk_size
+
+    # Precompute grid constants
+    Rzphi_strides = jnp.concatenate([jnp.array([1]), jnp.cumprod(nRzphi[:-1])])
+    XY_strides = jnp.concatenate([jnp.array([1]), jnp.cumprod(nXY[:-1])])
+    area_pixel = ((XY_minmax[0, 1] - XY_minmax[0, 0]) / nXY[0]) * \
+                 ((XY_minmax[1, 1] - XY_minmax[1, 0]) / nXY[1]) * 1e6
+
+    # 4-fold bar symmetry signs
+    sign_sym = jnp.array([
+        [ 1,  1,  1,  1,  1,  1],
+        [ 1,  1, -1,  1,  1, -1],
+        [-1, -1,  1, -1, -1,  1],
+        [-1, -1, -1, -1, -1, -1],
+    ])
+
+    # Initial derivative and E_J
+    k1_init = _deriv_barred(w0, acc_fn, Omega)
+    EJ_0 = _compute_EJ(w0, pot_fn, Omega)
+
+    # BS23 error coefficients
+    e1, e2, e3, e4 = -5.0/72.0, 1.0/12.0, 1.0/9.0, -1.0/8.0
+    safety = 0.9
+
+    # ── Inner scan: one RK step ──
+    def rk_step(carry, _):
+        t, y, dt, k1 = carry
+
+        k2 = _deriv_barred(y + 0.5 * dt * k1, acc_fn, Omega)
+        k3 = _deriv_barred(y + 0.75 * dt * k2, acc_fn, Omega)
+        y_new = y + dt * (2.0/9.0 * k1 + 1.0/3.0 * k2 + 4.0/9.0 * k3)
+        k4 = _deriv_barred(y_new, acc_fn, Omega)
+
+        err_vec = dt * (e1 * k1 + e2 * k2 + e3 * k3 + e4 * k4)
+        scale = atol + rtol * jnp.maximum(jnp.fabs(y), jnp.fabs(y_new))
+        err_norm = jnp.sqrt(jnp.mean((err_vec / scale)**2))
+        accept = err_norm <= 1.0
+
+        y_out = jnp.where(accept, y_new, y)
+        t_new = jnp.where(accept, t + dt, t)
+        k1_new = jnp.where(accept, k4, k1)
+
+        scale_factor = safety * jnp.power(jnp.maximum(err_norm, 1e-10), -1.0/3.0)
+        scale_factor = jnp.clip(scale_factor, 0.2, 5.0)
+        dt_new = jnp.clip(dt * scale_factor, dt_min, dt_max)
+
+        dt_out = jnp.where(accept, dt, 0.0)
+        return (t_new, y_out, dt_new, k1_new), (y_out, dt_out)
+
+    # ── Bin a chunk of trajectory points (vectorized) ──
+    def bin_chunk(y_chunk, dt_chunk, Rzphi_acc, counts_acc, sw1_acc, sw2_acc, sw3_acc, sw4_acc, T_acc):
+        # Apply 4-fold symmetry: (chunk_size, 6) -> (4*chunk_size, 6)
+        y_sym = (y_chunk[None, :, :] * sign_sym[:, None, :]).reshape(-1, 6)
+        dt_sym = jnp.tile(dt_chunk, 4)
+
+        # Rzphi binning (pre-rotation frame)
+        R_vals = jnp.sqrt(y_sym[:, 0]**2 + y_sym[:, 1]**2)
+        phi_vals = jnp.arctan2(y_sym[:, 1], y_sym[:, 0])
+        Rzphi = jnp.stack([R_vals, y_sym[:, 2], phi_vals], axis=-1)
+
+        Rzphi_indices = assign_regular_grid(Rzphi,
+                                            grid_min=Rzphi_minmax[:, 0],
+                                            grid_max=Rzphi_minmax[:, 1],
+                                            n_bins=nRzphi,
+                                            strides=Rzphi_strides)
+
+        # XY binning (post-rotation)
+        x_pos = y_sym[:, :3]
+        v_vel = y_sym[:, 3:]
+        x_rot = (rotation_matrix @ x_pos.T).T
+        v_rot = (rotation_matrix @ v_vel.T).T
+        XY = jnp.stack([x_rot[:, 0], x_rot[:, 2]], axis=-1)
+
+        XY_indices = assign_regular_grid(XY,
+                                         grid_min=XY_minmax[:, 0],
+                                         grid_max=XY_minmax[:, 1],
+                                         n_bins=nXY,
+                                         strides=XY_strides)
+        Vbin_indices = bin_mapping[XY_indices]
+
+        # GH moment accumulation (unnormalized — we normalize at the end)
+        vy = v_rot[:, 1] * KPCGYR_TO_KMS
+        v0_cell = v0[Vbin_indices]
+        s_cell = s[Vbin_indices]
+        w = (vy - v0_cell) / s_cell
+
+        # Accumulate with dt weighting (unnormalized)
+        Rzphi_acc = Rzphi_acc + jax.ops.segment_sum(dt_sym, Rzphi_indices, num_segments=num_segments_Rzphi)
+        counts_acc = counts_acc + jax.ops.segment_sum(dt_sym, Vbin_indices, num_segments=num_Vbin)
+        sw1_acc = sw1_acc + jax.ops.segment_sum(dt_sym * w, Vbin_indices, num_segments=num_Vbin)
+        sw2_acc = sw2_acc + jax.ops.segment_sum(dt_sym * w**2, Vbin_indices, num_segments=num_Vbin)
+        sw3_acc = sw3_acc + jax.ops.segment_sum(dt_sym * w**3, Vbin_indices, num_segments=num_Vbin)
+        sw4_acc = sw4_acc + jax.ops.segment_sum(dt_sym * w**4, Vbin_indices, num_segments=num_Vbin)
+        T_acc = T_acc + jnp.sum(dt_sym)
+
+        return Rzphi_acc, counts_acc, sw1_acc, sw2_acc, sw3_acc, sw4_acc, T_acc
+
+    # ── Outer scan: process one chunk per iteration ──
+    def chunk_body(carry, _):
+        t, y, dt, k1, Rzphi_acc, counts_acc, sw1_acc, sw2_acc, sw3_acc, sw4_acc, T_acc = carry
+
+        # Inner scan: chunk_size RK steps
+        (t_new, y_new, dt_new, k1_new), (y_chunk, dt_chunk) = jax.lax.scan(
+            rk_step, (t, y, dt, k1), xs=None, length=chunk_size
+        )
+
+        # Bin the chunk
+        Rzphi_acc, counts_acc, sw1_acc, sw2_acc, sw3_acc, sw4_acc, T_acc = \
+            bin_chunk(y_chunk, dt_chunk, Rzphi_acc, counts_acc, sw1_acc, sw2_acc, sw3_acc, sw4_acc, T_acc)
+
+        return (t_new, y_new, dt_new, k1_new, Rzphi_acc, counts_acc, sw1_acc, sw2_acc, sw3_acc, sw4_acc, T_acc), None
+
+    # Initialize accumulators
+    init_carry = (
+        0.0, w0, dt_init, k1_init,
+        jnp.zeros(num_segments_Rzphi),  # Rzphi_acc
+        jnp.zeros(num_Vbin),            # counts_acc
+        jnp.zeros(num_Vbin),            # sw1_acc
+        jnp.zeros(num_Vbin),            # sw2_acc
+        jnp.zeros(num_Vbin),            # sw3_acc
+        jnp.zeros(num_Vbin),            # sw4_acc
+        0.0,                            # T_acc
+    )
+
+    (t_final, y_final, _, _, Rzphi_acc, counts_acc, sw1_acc, sw2_acc, sw3_acc, sw4_acc, T_acc), _ = \
+        jax.lax.scan(chunk_body, init_carry, xs=None, length=n_chunks)
+
+    # ── Orbit-level validity ──
+    EJ_final = _compute_EJ(y_final, pot_fn, Omega)
+    delta_EJ = jnp.fabs(EJ_final / EJ_0 - 1.0)
+    valid = jnp.where((delta_EJ < 0.1) & (t_final > T_total / 10), 1.0, 0.0)
+
+    # ── Normalize and compute GH moments ──
+    T_integrated = T_acc + EPSILON
+    Rzphi_bin_counts = Rzphi_acc / T_integrated
+
+    eps = EPSILON
+    norm = counts_acc / T_integrated + eps
+    w1 = (sw1_acc / T_integrated) / norm
+    w2 = (sw2_acc / T_integrated) / norm
+    w3 = (sw3_acc / T_integrated) / norm
+    w4 = (sw4_acc / T_integrated) / norm
+
+    h1 = w1
+    h2 = (w2 - 1) / jnp.sqrt(2.0)
+    h3 = (w3 - 3 * w1) / jnp.sqrt(6.0)
+    h4 = (w4 - 6 * w2 + 3) / jnp.sqrt(24.0)
+    surface_density = (counts_acc / T_integrated) / (num_per_bin * area_pixel + eps)
+
+    n_accepted = T_acc / (dt_init + EPSILON)  # approximate
+
+    # Zero out bad orbits
+    Rzphi_bin_counts = jnp.where(valid > 0.5, Rzphi_bin_counts, jnp.zeros_like(Rzphi_bin_counts))
+    surface_density = jnp.where(valid > 0.5, surface_density, jnp.zeros_like(surface_density))
+    h1 = jnp.where(valid > 0.5, h1, jnp.zeros_like(h1))
+    h2 = jnp.where(valid > 0.5, h2, jnp.zeros_like(h2))
+    h3 = jnp.where(valid > 0.5, h3, jnp.zeros_like(h3))
+    h4 = jnp.where(valid > 0.5, h4, jnp.zeros_like(h4))
+
+    return Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid, n_accepted, T_integrated
+
+
+_integrate_adaptive_chunked_vmap = jax.vmap(integrate_adaptive_barred_chunked,
+                    in_axes=(
+                            0, None, None, None, 0,
+                            0, None,
+                            None, None,
+                            None, None,
+                            None, None, None,
+                            None, None,
+                            None, None, None,
+                            None, None, None,
+                            None))
+
+
+@partial(jax.jit, static_argnames=('acc_fn', 'pot_fn', 'N_max', 'chunk_size', 'num_Vbin', 'num_segments_Rzphi'))
+def integrate_adaptive_batch_chunked(w0, acc_fn, pot_fn, N_max, T_total,
+                             dt_init=0.010, Omega=0.0,
+                             atol=1e-8, rtol=1e-6,
+                             dt_min=1e-5, dt_max=0.1,
+                             num_Vbin=1028, bin_mapping=jnp.zeros(2400, dtype=jnp.int32),
+                             num_per_bin=jnp.zeros(1028, dtype=jnp.int32),
+                             Rzphi_minmax=jnp.array([[0, 10.], [-3, 3], [-jnp.pi, jnp.pi]]),
+                             XY_minmax=jnp.array([[-10., 10.], [-2., 2.]]),
+                             nRzphi=jnp.array([10, 6, 6]), nXY=jnp.array([40, 30]),
+                             num_segments_Rzphi=360,
+                             v0=jnp.zeros(1028), s=jnp.ones(1028) * 5.0,
+                             rotation_matrix=jnp.eye(3),
+                             chunk_size=500):
+    """Batch adaptive integration with chunked binning, analogous to integrate_adaptive_batch."""
+
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid, n_accepted, T_integrated = _integrate_adaptive_chunked_vmap(
+        w0, acc_fn, pot_fn, N_max, T_total,
+        dt_init, Omega, atol, rtol, dt_min, dt_max,
+        num_Vbin, bin_mapping, num_per_bin,
+        Rzphi_minmax, XY_minmax,
+        nRzphi, nXY, num_segments_Rzphi,
+        v0, s, rotation_matrix,
+        chunk_size)
+
+    A_Rzphi = Rzphi_bin_counts.T
+    A_xy = surface_density.T
+    A_h1 = h1.T
+    A_h2 = h2.T
+    A_h3 = h3.T
+    A_h4 = h4.T
+
+    weights = jnp.ones(A_Rzphi.shape[1]) / (valid.sum() + 0.1)
+    A_h1, A_h2, A_h3, A_h4 = (A_h1 * A_xy), (A_h2 * A_xy), (A_h3 * A_xy), (A_h4 * A_xy)
+
+    Rzphi_bin_counts_out = A_Rzphi @ weights
+    surface_density_out = A_xy @ weights
+    h1_out = A_h1 @ weights / (surface_density_out + EPSILON)
+    h2_out = A_h2 @ weights / (surface_density_out + EPSILON)
+    h3_out = A_h3 @ weights / (surface_density_out + EPSILON)
+    h4_out = A_h4 @ weights / (surface_density_out + EPSILON)
+
+    return Rzphi_bin_counts_out, surface_density_out, h1_out, h2_out, h3_out, h4_out, valid.sum()
+
+
+_integrate_adaptive_batch_chunked_vmap = jax.vmap(integrate_adaptive_batch_chunked,
+                    in_axes=(
+                            0, None, None, None, 0,
+                            0, None,
+                            None, None,
+                            None, None,
+                            None, None, None,
+                            None, None,
+                            None, None, None,
+                            None, None, None,
+                            None))
+
+
 @partial(jax.jit, static_argnames=('acc_fn', 'pot_fn', 'N_max', 'num_Vbin', 'num_segments_Rzphi'))
 def integrate_adaptive_batch(w0, acc_fn, pot_fn, N_max, T_total,
                              dt_init=0.010, Omega=0.0,
