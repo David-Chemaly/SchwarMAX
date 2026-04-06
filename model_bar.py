@@ -24,7 +24,7 @@ import multiprocessing as mp
 
 from potentials import NFW_potential, NFW_acceleration, MiyamotoNagai_potential, MiyamotoNagai_acceleration
 from integrants_with_binning import *
-from integrants_with_binning import _integrate_barred_vmap, _integrate_batch_vmap, _integrate_adaptive_batch_vmap
+from integrants_with_binning import _integrate_barred_vmap, _integrate_batch_vmap, _integrate_adaptive_batch_vmap, _integrate_adaptive_batch_chunked_vmap
 from ghMoments import *
 from utils import *
 from constants import EPSILON, G
@@ -683,13 +683,17 @@ def solve_nnls_admm_bootstrap(
     eps = 1e-8
     y_xy_safe = jnp.where(jnp.abs(y_xy) > eps, y_xy, 1.0)
 
+    w_rzphi = jnp.sqrt(5.0)# / A_Rzphi.shape[0]
+    w_xy    = jnp.sqrt(5.0)# / A_xy.shape[0]
+    w_h     = jnp.sqrt(1.0)# / A_h1.shape[0]
+
     # ---- Build design matrix U (shared across all bootstraps) ----
-    U_rz  = A_Rzphi / (sig_Rzphi[:, None] + eps)
-    U_xy_ = A_xy / (sig_xy[:, None] + eps)
-    U_h1_ = (A_h1 * A_xy) / y_xy_safe[:, None] / (sig_A1[:, None] + eps)
-    U_h2_ = (A_h2 * A_xy) / y_xy_safe[:, None] / (sig_A2[:, None] + eps)
-    U_h3_ = (A_h3 * A_xy) / y_xy_safe[:, None] / (sig_A3[:, None] + eps)
-    U_h4_ = (A_h4 * A_xy) / y_xy_safe[:, None] / (sig_A4[:, None] + eps)
+    U_rz  = w_rzphi * A_Rzphi / (sig_Rzphi[:, None] + eps)
+    U_xy_ = w_xy * A_xy / (sig_xy[:, None] + eps)
+    U_h1_ = w_h * (A_h1 * A_xy) / y_xy_safe[:, None] / (sig_A1[:, None] + eps)
+    U_h2_ = w_h * (A_h2 * A_xy) / y_xy_safe[:, None] / (sig_A2[:, None] + eps)
+    U_h3_ = w_h * (A_h3 * A_xy) / y_xy_safe[:, None] / (sig_A3[:, None] + eps)
+    U_h4_ = w_h * (A_h4 * A_xy) / y_xy_safe[:, None] / (sig_A4[:, None] + eps)
     U = jnp.vstack([U_rz, U_xy_, U_h1_, U_h2_, U_h3_, U_h4_])
 
     n_orb = U.shape[1]
@@ -703,16 +707,16 @@ def solve_nnls_admm_bootstrap(
     alpha = 1.6
 
     # ---- Normalized y_Rzphi (shared, not bootstrapped) ----
-    y_rz_shared = y_Rzphi / (sig_Rzphi + eps)  # (n_Rzphi_bins,)
+    y_rz_shared = w_rzphi * y_Rzphi / (sig_Rzphi + eps)  # (n_Rzphi_bins,)
 
     # ---- Build normalized y vectors for each bootstrap ----
     # y_Rzphi part is the same for all bootstraps; only xy and h1-h4 vary
     def _build_y_vec(y_xy_i, y_h1_i, y_h2_i, y_h3_i, y_h4_i):
-        y_xy_ = y_xy_i / (sig_xy + eps)
-        y_h1_ = y_h1_i / (sig_A1 + eps)
-        y_h2_ = y_h2_i / (sig_A2 + eps)
-        y_h3_ = y_h3_i / (sig_A3 + eps)
-        y_h4_ = y_h4_i / (sig_A4 + eps)
+        y_xy_ = w_xy * y_xy_i / (sig_xy + eps)
+        y_h1_ = w_h * y_h1_i / (sig_A1 + eps)
+        y_h2_ = w_h * y_h2_i / (sig_A2 + eps)
+        y_h3_ = w_h * y_h3_i / (sig_A3 + eps)
+        y_h4_ = w_h * y_h4_i / (sig_A4 + eps)
         return jnp.concatenate([y_rz_shared, y_xy_, y_h1_, y_h2_, y_h3_, y_h4_])
 
     y_vecs = jax.vmap(_build_y_vec)(
@@ -753,7 +757,8 @@ def compute_model_and_logl_bootstrap(
     y_Rzphi,
     y_xy_boot, y_h1_boot, y_h2_boot, y_h3_boot, y_h4_boot,
     sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-    v0, s,
+    v0, s, 
+    sigma_amplifier, light_to_mass_ratio, mass_per_orb
 ):
     """
     Compute best-fit model vectors and logL for each bootstrap weight vector.
@@ -769,6 +774,8 @@ def compute_model_and_logl_bootstrap(
         y_h1_boot..y_h4_boot: bootstrapped kinematics (N_boot, n_xy_bins)
         sig_*: error vectors — shared
         v0, s: for h_to_V_sigma conversion
+        light_to_mass_ratio: conversion factor from light to mass
+        mass_per_orb: mass per orbit
 
     Returns:
         logl_marg: scalar, log(mean(exp(logL_i)))
@@ -782,6 +789,12 @@ def compute_model_and_logl_bootstrap(
     A_h2_xy = A_h2 * A_xy
     A_h3_xy = A_h3 * A_xy
     A_h4_xy = A_h4 * A_xy
+
+    sig_xy = sig_xy * sigma_amplifier
+    sig_A1 = sig_A1 * sigma_amplifier
+    sig_A2 = sig_A2 * sigma_amplifier
+    sig_A3 = sig_A3 * sigma_amplifier
+    sig_A4 = sig_A4 * sigma_amplifier
 
     def _single(w, y_xy_i, y_h1_i, y_h2_i, y_h3_i, y_h4_i):
         y_xy_safe = jnp.where(jnp.abs(y_xy_i) > eps, y_xy_i, 1.0)
@@ -804,9 +817,9 @@ def compute_model_and_logl_bootstrap(
         res_h3 = jnp.where(h3_model < 9.9, ((h3_model - y_h3_i) / (sig_A3 + EPSILON))**2, 0)
         res_h4 = jnp.where(h4_model < 9.9, ((h4_model - y_h4_i) / (sig_A4 + EPSILON))**2, 0)
         logl = -0.5 * (jnp.nansum(res_density) + jnp.nansum(res_h1) + jnp.nansum(res_h2) +
-                       jnp.nansum(res_h3) + jnp.nansum(res_h4))# - (jnp.sum(jnp.log(sig_xy)) +
-                        # jnp.sum(jnp.log(sig_A1)) + jnp.sum(jnp.log(sig_A2)) +
-                        # jnp.sum(jnp.log(sig_A3)) + jnp.sum(jnp.log(sig_A4)))
+                       jnp.nansum(res_h3) + jnp.nansum(res_h4)) - (jnp.sum(jnp.log(sig_xy * light_to_mass_ratio * mass_per_orb)) +
+                         jnp.sum(jnp.log(sig_A1)) + jnp.sum(jnp.log(sig_A2)) +
+                         jnp.sum(jnp.log(sig_A3)) + jnp.sum(jnp.log(sig_A4)))
         # logl = -0.5 * (jnp.nansum(res_h1) + jnp.nansum(res_h2) +
         #                jnp.nansum(res_h3) + jnp.nansum(res_h4))# - (
         #                 # jnp.sum(jnp.log(sig_A1)) + jnp.sum(jnp.log(sig_A2)) +
@@ -1096,6 +1109,7 @@ def model_bootstrap(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
 
     sigma_density_model = params_disk_rho['sigma_density_model']
     sigma_kine_model = params_disk_rho['sigma_kine_model']
+    sigma_amplifier = params_disk_rho['sigma_amplifier']
 
     #=========================================== BUILD BARYON PARAMS =====================================================
     # Derive bar parameters
@@ -1196,15 +1210,26 @@ def model_bootstrap(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     atol, rtol = 1e-7, 1e-4
     dt_min, dt_max = 1e-5, 0.3
 
-    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, _ = _integrate_adaptive_batch_vmap(
+    # Rzphi_bin_counts, surface_density, h1, h2, h3, h4, _ = _integrate_adaptive_batch_vmap(
+    #                     w0_new_batch, acc_fn, pot_fn, N_max, T_total_batch,
+    #                     dt_init_batch, -Omega_bar,
+    #                     atol, rtol,
+    #                     dt_min, dt_max,
+    #                     num_Vbin, bin_mapping, num_per_bin,
+    #                     Rzphi_lim_grid, xy_lim_grid,
+    #                     Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
+    #                     v0, s, rotation_matrix)
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, _ = _integrate_adaptive_batch_chunked_vmap(
                         w0_new_batch, acc_fn, pot_fn, N_max, T_total_batch,
                         dt_init_batch, -Omega_bar,
-                        atol, rtol,
-                        dt_min, dt_max,
+                        atol, rtol,     # atol, rtol
+                        dt_min, dt_max,      # dt_min, dt_max
                         num_Vbin, bin_mapping, num_per_bin,
                         Rzphi_lim_grid, xy_lim_grid,
                         Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
-                        v0, s, rotation_matrix)
+                        v0, s, rotation_matrix,
+                        50
+    )
     A_Rzphi = Rzphi_bin_counts.T
     A_xy = surface_density.T
     A_h1 = h1.T
@@ -1299,7 +1324,7 @@ def model_bootstrap(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
             y_Rzphi,
             y_xy_boot, y_h1_boot, y_h2_boot, y_h3_boot, y_h4_boot,
             sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-            v0, s,
+            v0, s, sigma_amplifier, params_disk_rho['light_to_mass_ratio'], mean_mass_per_orb
         )
     density_all = density_all * mean_mass_per_orb * params_disk_rho['light_to_mass_ratio']  # convert back to luminosity units for density
 

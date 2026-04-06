@@ -135,7 +135,7 @@ rot_angle = -bar_angle0
 w0_data = rotate(w0_data, rot_angle)  # rotate to make it anticlockwise
 
 
-alpha, beta, gamma = 30, 20, 140
+alpha, beta, gamma = 30, 20, 150
 rot_mat = makeRotationMatrix(alpha, beta, gamma)
 x_data, v_data = w0_data[:,:3], w0_data[:,3:]
 x_data = (rot_mat @ x_data.T).T
@@ -390,7 +390,7 @@ cb7 = ax1[0,3].scatter(df_XY_merged['X_grid'], df_XY_merged['Y_grid'], c= v0[df_
 fig1.colorbar(cb7, ax=ax1[0,3], label='v0')
 ax1[0,3].set_title('v0')
 
-fig1.savefig(data_folder+'/plots/mock_Nbody_bar_XY_withRot_gal2_Nbins1000.png', bbox_inches='tight')
+fig1.savefig(data_folder+'/plots/mock_Nbody_bar_XY_withRot_gal2_Nbins1000_BarFaceOn.png', bbox_inches='tight')
 
 for i in range (0,2):
     for j in range (0,4):
@@ -493,7 +493,7 @@ fig1.colorbar(cb7, ax=ax1[0,3], label='s')
 ax1[0,3].set_title('s')
 
 
-with open(path + 'mock_Nbody_bar_XY_withRot_gal2_Nbins1000.pkl', 'wb') as f:
+with open(path + 'mock_Nbody_bar_XY_withRot_gal2_Nbins1000_BarFaceOn.pkl', 'wb') as f:
     pickle.dump(bin_dict, f)
 
 plt.show()

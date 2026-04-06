@@ -435,36 +435,158 @@ dt_init = T_orb / N_step_per_orb
 atol, rtol = 1e-7, 1e-4
 dt_min, dt_max = 1e-5, 0.3
 
+# common_args = (
+#     w0_new, acc_fn, pot_fn, N_max, T_total,
+#     dt_init, -Omega_bar,
+#     atol, rtol,
+#     dt_min, dt_max,
+#     num_Vbin, bin_mapping, num_per_bin,
+#     Rzphi_lim_grid, xy_lim_grid,
+#     Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
+#     v0, s, rotation_matrix,
+# )
+
+# ── 1) Original (no chunking) ──
+
+N_step_per_orb = 100
+N_dynamical_time = 100
+N_max = N_step_per_orb * N_dynamical_time
+T_total = T_orb * N_dynamical_time
+dt_init = T_orb / N_step_per_orb
+atol, rtol = 1e-7, 1e-4
+dt_min, dt_max = 1e-5, 0.3
+
+common_args = (
+    w0_new, acc_fn, pot_fn, N_max, T_total,
+    dt_init, -Omega_bar,
+    atol, rtol,
+    dt_min, dt_max,
+    num_Vbin, bin_mapping, num_per_bin,
+    Rzphi_lim_grid, xy_lim_grid,
+    Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
+    v0, s, rotation_matrix,
+)
+
+print("=" * 60)
+print("Running ORIGINAL (no chunking)...")
 time_start = time.time()
-# Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid, _, t_total = _integrate_adaptive_vmap(
-#                     w0_new, acc_fn, pot_fn, N_max, T_total,
-#                     dt_init, -Omega_bar,
-#                     atol, rtol,
-#                     dt_min, dt_max,
-#                     num_Vbin, bin_mapping, num_per_bin,
-#                     Rzphi_lim_grid, xy_lim_grid,
-#                     Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
-#                     v0, s, rotation_matrix)
-_integrate_adaptive_chunked_vmap
-Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid, _, t_total = _integrate_adaptive_chunked_vmap(
-                    w0_new, acc_fn, pot_fn, N_max, T_total,
-                    dt_init, -Omega_bar,
-                    atol, rtol,
-                    dt_min, dt_max,
-                    num_Vbin, bin_mapping, num_per_bin,
-                    Rzphi_lim_grid, xy_lim_grid,
-                    Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
-                    v0, s, rotation_matrix,
-                    5000)
-A_Rzphi = Rzphi_bin_counts.T
-A_xy = surface_density.T
-A_h1 = h1.T
-A_h2 = h2.T
-A_h3 = h3.T
-A_h4 = h4.T
-Rzphi_bin_counts.block_until_ready()
-print("Number of valid orbits:", jnp.sum(valid))
-print("Integration time:", time.time() - time_start, "seconds")
+Rzphi_orig, sd_orig, h1_orig, h2_orig, h3_orig, h4_orig, valid_orig, _, t_total_orig = \
+    _integrate_adaptive_vmap(*common_args)
+Rzphi_orig.block_until_ready()
+t_orig = time.time() - time_start
+print(f"  Valid orbits: {jnp.sum(valid_orig):.0f}")
+print(f"  Time: {t_orig:.1f}s")
+
+A_Rzphi_orig = Rzphi_orig.T
+A_xy_orig = sd_orig.T
+A_h1_orig = h1_orig.T
+A_h2_orig = h2_orig.T
+A_h3_orig = h3_orig.T
+A_h4_orig = h4_orig.T
+
+# ── 2) Chunked (chunk_size=500) ──
+
+N_step_per_orb = 100
+N_dynamical_time = 150
+N_max = N_step_per_orb * N_dynamical_time
+T_total = T_orb * N_dynamical_time
+dt_init = T_orb / N_step_per_orb
+atol, rtol = 1e-7, 1e-4
+dt_min, dt_max = 1e-5, 0.3
+
+common_args = (
+    w0_new, acc_fn, pot_fn, N_max, T_total,
+    dt_init, -Omega_bar,
+    atol, rtol,
+    dt_min, dt_max,
+    num_Vbin, bin_mapping, num_per_bin,
+    Rzphi_lim_grid, xy_lim_grid,
+    Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
+    v0, s, rotation_matrix,
+)
+
+print("=" * 60)
+print("Running CHUNKED (chunk_size=500)...")
+time_start = time.time()
+Rzphi_chunk, sd_chunk, h1_chunk, h2_chunk, h3_chunk, h4_chunk, valid_chunk, _, t_total_chunk = \
+    _integrate_adaptive_chunked_vmap(*common_args, 100)
+Rzphi_chunk.block_until_ready()
+t_chunk = time.time() - time_start
+print(f"  Valid orbits: {jnp.sum(valid_chunk):.0f}")
+print(f"  Time: {t_chunk:.1f}s")
+
+A_Rzphi_chunk = Rzphi_chunk.T
+A_xy_chunk = sd_chunk.T
+A_h1_chunk = h1_chunk.T
+A_h2_chunk = h2_chunk.T
+A_h3_chunk = h3_chunk.T
+A_h4_chunk = h4_chunk.T
+
+# ── 3) Compare ──
+print("=" * 60)
+print("COMPARISON: original vs chunked (chunk=500)")
+print("=" * 60)
+
+def report_diff(name, a, b):
+    """Report max abs and relative differences."""
+    abs_diff = jnp.fabs(a - b)
+    denom = jnp.maximum(jnp.fabs(a), jnp.fabs(b)) + 1e-30
+    rel_diff = abs_diff / denom
+    # Only look at non-zero entries
+    mask = (jnp.fabs(a) > 1e-20) | (jnp.fabs(b) > 1e-20)
+    rel_masked = jnp.where(mask, rel_diff, 0.0)
+    print(f"  {name:20s}: max_abs={abs_diff.max():.6e}  max_rel={rel_masked.max():.6e}  "
+          f"mean_abs={abs_diff.mean():.6e}  median_rel={jnp.median(jnp.where(mask, rel_diff, 0.0)):.6e}")
+
+report_diff("A_Rzphi", A_Rzphi_orig, A_Rzphi_chunk)
+report_diff("A_xy (surf dens)", A_xy_orig, A_xy_chunk)
+report_diff("A_h1", A_h1_orig, A_h1_chunk)
+report_diff("A_h2", A_h2_orig, A_h2_chunk)
+report_diff("A_h3", A_h3_orig, A_h3_chunk)
+report_diff("A_h4", A_h4_orig, A_h4_chunk)
+report_diff("t_total", t_total_orig, t_total_chunk)
+report_diff("valid", valid_orig, valid_chunk)
+
+# Per-orbit comparison: fraction of orbits with any significant difference
+rel_per_orbit_sd = jnp.max(jnp.fabs(sd_orig - sd_chunk) / (jnp.fabs(sd_orig) + 1e-20), axis=1)
+rel_per_orbit_h1 = jnp.max(jnp.fabs(h1_orig - h1_chunk) / (jnp.fabs(h1_orig) + 1e-20), axis=1)
+print(f"\n  Per-orbit surface density max_rel: "
+      f"median={jnp.median(rel_per_orbit_sd):.6e}  95th={jnp.percentile(rel_per_orbit_sd, 95):.6e}  "
+      f"max={rel_per_orbit_sd.max():.6e}")
+print(f"  Per-orbit h1 max_rel:              "
+      f"median={jnp.median(rel_per_orbit_h1):.6e}  95th={jnp.percentile(rel_per_orbit_h1, 95):.6e}  "
+      f"max={rel_per_orbit_h1.max():.6e}")
+
+# Aggregate: uniform-weight kinematic maps
+weights_uniform = jnp.ones(A_Rzphi_orig.shape[1])
+def get_maps(A_xy, A_h1, A_h2, A_h3, A_h4, w):
+    sd = A_xy @ w
+    h1m = (A_h1 * A_xy) @ w / (sd + 1e-20)
+    h2m = (A_h2 * A_xy) @ w / (sd + 1e-20)
+    h3m = (A_h3 * A_xy) @ w / (sd + 1e-20)
+    h4m = (A_h4 * A_xy) @ w / (sd + 1e-20)
+    return sd, h1m, h2m, h3m, h4m
+
+sd_o, h1m_o, h2m_o, h3m_o, h4m_o = get_maps(A_xy_orig, A_h1_orig, A_h2_orig, A_h3_orig, A_h4_orig, weights_uniform)
+sd_c, h1m_c, h2m_c, h3m_c, h4m_c = get_maps(A_xy_chunk, A_h1_chunk, A_h2_chunk, A_h3_chunk, A_h4_chunk, weights_uniform)
+
+print(f"\n  Aggregate maps (uniform weights):")
+report_diff("density", sd_o, sd_c)
+report_diff("h1", h1m_o, h1m_c)
+report_diff("h2", h2m_o, h2m_c)
+report_diff("h3", h3m_o, h3m_c)
+report_diff("h4", h4m_o, h4m_c)
+
+# ── Use the original for saving (keeping existing behavior) ──
+A_Rzphi = A_Rzphi_orig
+A_xy = A_xy_orig
+A_h1 = A_h1_orig
+A_h2 = A_h2_orig
+A_h3 = A_h3_orig
+A_h4 = A_h4_orig
+valid = valid_orig
+t_total = t_total_orig
+Rzphi_bin_counts = Rzphi_orig
 
 @jax.jit
 def density_func_Rz(R, z, phi, params):
@@ -512,10 +634,16 @@ y_Rzphi = y_Rzphi / mean_mass_per_orb
 sig_Rzphi = sig_Rzphi / mean_mass_per_orb
 
 path_data = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data/'
-with open(path_data + 'orbital_library_adaptive_Nmax5e3_Chunk5000.pkl', 'wb') as f:
-    orb_lib = (A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4, \
+with open(path_data + 'orbital_library_adaptive_Nmax5e3_noChunk.pkl', 'wb') as f:
+    orb_lib = (A_Rzphi_orig, A_xy_orig, A_h1_orig, A_h2_orig, A_h3_orig, A_h4_orig, \
         y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4, \
-        sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4, t_total/T_orb)
+        sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4, t_total_orig/T_orb)
+    pickle.dump(orb_lib, f)
+
+with open(path_data + 'orbital_library_adaptive_Nmax5e3_Chunk500.pkl', 'wb') as f:
+    orb_lib = (A_Rzphi_chunk, A_xy_chunk, A_h1_chunk, A_h2_chunk, A_h3_chunk, A_h4_chunk, \
+        y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4, \
+        sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4, t_total_chunk/T_orb)
     pickle.dump(orb_lib, f)
 
 

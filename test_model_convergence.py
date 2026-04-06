@@ -104,19 +104,38 @@ ground_truth = [
 
 import time
 
-N_max_iteration_ls = [1000, 3000, 5000, 10000, 20000]
+# N_max_iteration_ls = [1000, 3000, 5000, 10000, 20000]
+# logL_values = []
+# times = []
+# for N_max in N_max_iteration_ls:
+#     time_start = time.time()
+#     logL = logl_angular_input_bootstrap_test(ground_truth, dict_data, dict_data['total_bins'], N_max_integration=N_max)
+#     logL_values.append(logL)
+#     print(f'N_max_integration={N_max}, logL={logL}')
+#     time_end = time.time()
+#     times.append(time_end - time_start)
+
+# print('Summary of logL values for different N_max_integration:')
+# print('N_max_integration  |  logL |  Time (s)')
+# for N_max, logL, time_taken in zip(N_max_iteration_ls, logL_values, times):
+#     print(f'{N_max:<20} | {logL} | {time_taken:.2f} seconds')
+#     print('-'*50)
+
+N_orb_iteration_ls = [1000, 3000, 5000, 10000, 15000]
 logL_values = []
 times = []
-for N_max in N_max_iteration_ls:
+for N_orb in N_orb_iteration_ls:
     time_start = time.time()
-    logL = logl_angular_input_bootstrap_test(ground_truth, dict_data, dict_data['total_bins'], N_max_integration=N_max)
+    dict_data = get_dict_data_bootstrap(path, filename, N_BOOTSTRAP=100, n_samples=N_orb)
+    dict_data['logl_density_max'] = logl_val
+    logL = logl_angular_input_bootstrap_test(ground_truth, dict_data, dict_data['total_bins'], N_max_integration=5_000)
     logL_values.append(logL)
-    print(f'N_max_integration={N_max}, logL={logL}')
+    print(f'N_orb={N_orb}, logL={logL}')
     time_end = time.time()
     times.append(time_end - time_start)
 
-print('Summary of logL values for different N_max_integration:')
-print('N_max_integration  |  logL |  Time (s)')
-for N_max, logL, time_taken in zip(N_max_iteration_ls, logL_values, times):
-    print(f'{N_max:<20} | {logL} | {time_taken:.2f} seconds')
+print('Summary of logL values for different N_orb:')
+print('N_orb  |  logL |  Time (s)')
+for N_orb, logL, time_taken in zip(N_orb_iteration_ls, logL_values, times):
+    print(f'{N_orb:<20} | {logL} | {time_taken:.2f} seconds')
     print('-'*50)

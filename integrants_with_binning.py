@@ -1551,3 +1551,93 @@ _integrate_adaptive_batch_vmap = jax.vmap(integrate_adaptive_batch,
                             None, None,
                             None, None, None,
                             None, None, None))
+
+
+@partial(jax.jit, static_argnames=('acc_fn', 'pot_fn', 'N_max', 'chunk_size', 'num_Vbin', 'num_segments_Rzphi'))
+def integrate_adaptive_batch_chunked_psf(
+    w0, acc_fn, pot_fn, N_max, T_total,
+    dt_init=0.010, Omega=0.0,
+    atol=1e-8, rtol=1e-6,
+    dt_min=1e-5, dt_max=0.1,
+    num_Vbin=1028, bin_mapping=jnp.zeros(2400, dtype=jnp.int32),
+    num_per_bin=jnp.zeros(1028, dtype=jnp.int32),
+    Rzphi_minmax=jnp.array([[0, 10.], [-3, 3], [-jnp.pi, jnp.pi]]),
+    XY_minmax=jnp.array([[-10., 10.], [-2., 2.]]),
+    nRzphi=jnp.array([10, 6, 6]), nXY=jnp.array([40, 30]),
+    num_segments_Rzphi=360,
+    v0=jnp.zeros(1028), s=jnp.ones(1028) * 5.0,
+    rotation_matrix=jnp.eye(3),
+    chunk_size=500,
+    P_psf=jnp.eye(1),
+):
+    """Adaptive integration with chunked binning and PSF smearing.
+
+    Same as integrate_adaptive_batch_chunked, but after building the orbit
+    library matrices, applies the PSF transfer matrix P to the projected
+    (XY) quantities using flux-weighted convolution.
+
+    Parameters
+    ----------
+    P_psf : array (num_Vbin, num_Vbin)
+        PSF transfer matrix. P_psf[i,j] = fraction of flux from bin j
+        observed in bin i. Pass identity matrix for no smearing.
+        Build with utils.compute_transfer_matrix().
+    All other parameters: same as integrate_adaptive_batch_chunked.
+
+    Returns
+    -------
+    A_Rzphi : array (num_segments_Rzphi, n_orbits)
+        3D density orbit library (NOT smeared — intrinsic).
+    A_xy : array (num_Vbin, n_orbits)
+        Surface density orbit library (PSF-smeared).
+    A_h1, A_h2, A_h3, A_h4 : array (num_Vbin, n_orbits)
+        Flux-weighted GH moment orbit libraries (PSF-smeared).
+        These are already multiplied by A_xy: model h_i = (A_hi @ w) / (A_xy @ w).
+    valid_count : float
+        Number of valid orbits.
+    """
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, valid, n_accepted, T_integrated = \
+        _integrate_adaptive_chunked_vmap(
+            w0, acc_fn, pot_fn, N_max, T_total,
+            dt_init, Omega, atol, rtol, dt_min, dt_max,
+            num_Vbin, bin_mapping, num_per_bin,
+            Rzphi_minmax, XY_minmax,
+            nRzphi, nXY, num_segments_Rzphi,
+            v0, s, rotation_matrix,
+            chunk_size)
+
+    # Transpose to orbit library matrices: (n_bins, n_orbits)
+    A_Rzphi = Rzphi_bin_counts.T
+    A_xy = surface_density.T
+    A_h1 = h1.T
+    A_h2 = h2.T
+    A_h3 = h3.T
+    A_h4 = h4.T
+
+    # Flux-weight the GH moments: A_hi becomes Sigma * h_i per orbit
+    A_h1, A_h2, A_h3, A_h4 = A_h1 * A_xy, A_h2 * A_xy, A_h3 * A_xy, A_h4 * A_xy
+
+    # Apply PSF transfer matrix to projected quantities
+    # P @ A_xy smears surface density; P @ (A_hi) smears flux-weighted moments
+    # Kinematics recovery: h_i_obs = (P @ A_hi) @ w / ((P @ A_xy) @ w)
+    A_xy = P_psf @ A_xy
+    A_h1 = P_psf @ A_h1
+    A_h2 = P_psf @ A_h2
+    A_h3 = P_psf @ A_h3
+    A_h4 = P_psf @ A_h4
+
+    return A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4, valid.sum()
+
+
+_integrate_adaptive_batch_chunked_psf_vmap = jax.vmap(
+    integrate_adaptive_batch_chunked_psf,
+    in_axes=(
+        0, None, None, None, 0,
+        0, None,
+        None, None,
+        None, None,
+        None, None, None,
+        None, None,
+        None, None, None,
+        None, None, None,
+        None, None))

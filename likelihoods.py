@@ -433,7 +433,7 @@ def logl_fixed_potential_bootstrap(params, dict_phi_baryon, dict_data, num_Vbin)
 
     nan_in_weights = jnp.isnan(weights_all).any()
     val = jax.lax.cond(nan_in_weights, _true_func, _false_func)
-    return val
+    return val, _m_eff
 
 
 @partial(jax.jit, static_argnames=('num_Vbin'))
@@ -596,7 +596,7 @@ def get_dict_data_bootstrap(path, filename, N_BOOTSTRAP = 100):
     logP_xexp = XexpX_pdf_log(x_grid, 4.0)
     key = jax.random.PRNGKey(10086)
     R_samples = sample_from_logP(x_grid, logP_xexp, n_samples, key)
-    phi_samples = np.random.uniform(0, 2*np.pi, size=n_samples)
+    phi_samples = np.random.default_rng(42).uniform(0, 2*np.pi, size=n_samples)
 
     x_samples, y_samples = R_samples * np.cos(phi_samples), R_samples * np.sin(phi_samples)
 

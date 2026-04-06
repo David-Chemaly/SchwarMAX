@@ -379,6 +379,7 @@ def logl_angular_input_bootstrap(params, dict_data, num_Vbin):
 
     sigma_density_model = 0#10**params[12]
     sigma_kine_model = 0. 
+    sigma_amplifier = 10**params[12]
 
     alpha = alpha * 180 / jnp.pi
     beta = beta * 180 / jnp.pi
@@ -426,6 +427,7 @@ def logl_angular_input_bootstrap(params, dict_data, num_Vbin):
 
         'sigma_density_model': sigma_density_model,
         'sigma_kine_model': sigma_kine_model,
+        'sigma_amplifier': sigma_amplifier,
     }
 
     surface_density_model = projection(params_baryon_rho, dict_data, num_Vbin)
@@ -445,7 +447,7 @@ def logl_angular_input_bootstrap(params, dict_data, num_Vbin):
         def _true_func():
             return -jnp.inf
         def _false_func():
-            return _logl_marg - _m_eff
+            return _logl_marg# - _m_eff
 
         nan_in_weights = jnp.isnan(weights_all).any()
         logl = jax.lax.cond(nan_in_weights, _true_func, _false_func)
@@ -760,7 +762,7 @@ def get_dict_data(path):
     logP_xexp = XexpX_pdf_log(x_grid, 4.0)
     key = jax.random.PRNGKey(10086)
     R_samples = sample_from_logP(x_grid, logP_xexp, n_samples, key)
-    phi_samples = np.random.uniform(0, 2*np.pi, size=n_samples)
+    phi_samples = np.random.default_rng(54321).uniform(0, 2*np.pi, size=n_samples)
 
     x_samples, y_samples = R_samples * np.cos(phi_samples), R_samples * np.sin(phi_samples)
 
@@ -817,7 +819,7 @@ def get_dict_data(path):
 
     return dict_data
 
-def get_dict_data_bootstrap(path, filename, N_BOOTSTRAP = 100):
+def get_dict_data_bootstrap(path, filename, N_BOOTSTRAP = 100, n_samples = 5_000):
 
     with open(path + filename, 'rb') as f:
         bin_dict = pickle.load(f)
@@ -917,12 +919,12 @@ def get_dict_data_bootstrap(path, filename, N_BOOTSTRAP = 100):
     sampler = qmc.Sobol(d=3, scramble=False)
     sample = sampler.random_base2(m=10)
 
-    n_samples = 5_000  # Same number as original data
+    n_samples = n_samples  # Same number as original data
     x_grid = np.linspace(0, 12, 1000)
     logP_xexp = XexpX_pdf_log(x_grid, 4.0)
     key = jax.random.PRNGKey(10086)
     R_samples = sample_from_logP(x_grid, logP_xexp, n_samples, key)
-    phi_samples = np.random.uniform(0, 2*np.pi, size=n_samples)
+    phi_samples = np.random.default_rng(42).uniform(0, 2*np.pi, size=n_samples)
 
     x_samples, y_samples = R_samples * np.cos(phi_samples), R_samples * np.sin(phi_samples)
 

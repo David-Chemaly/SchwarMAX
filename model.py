@@ -24,7 +24,7 @@ import multiprocessing as mp
 
 from potentials import *
 from integrants_with_binning import *
-from integrants_with_binning import _integrate_barred_vmap, _integrate_batch_vmap, _integrate_adaptive_batch_vmap
+from integrants_with_binning import _integrate_barred_vmap, _integrate_batch_vmap, _integrate_adaptive_batch_vmap, _integrate_adaptive_batch_chunked_vmap
 from ghMoments import *
 from utils import *
 from constants import EPSILON
@@ -703,12 +703,17 @@ def solve_nnls_admm_bootstrap(
     y_xy_safe = jnp.where(jnp.abs(y_xy) > eps, y_xy, 1.0)
 
     # ---- Build design matrix U (shared across all bootstraps) ----
-    U_rz  = A_Rzphi / (sig_Rzphi[:, None] + eps)
-    U_xy_ = A_xy / (sig_xy[:, None] + eps)
-    U_h1_ = (A_h1 * A_xy) / y_xy_safe[:, None] / (sig_A1[:, None] + eps)
-    U_h2_ = (A_h2 * A_xy) / y_xy_safe[:, None] / (sig_A2[:, None] + eps)
-    U_h3_ = (A_h3 * A_xy) / y_xy_safe[:, None] / (sig_A3[:, None] + eps)
-    U_h4_ = (A_h4 * A_xy) / y_xy_safe[:, None] / (sig_A4[:, None] + eps)
+
+    w_rzphi = jnp.sqrt(1.0)# / A_Rzphi.shape[0]
+    w_xy    = jnp.sqrt(1.0)# / A_xy.shape[0]
+    w_h     = jnp.sqrt(1.0)# / A_h1.shape[0]
+
+    U_rz  = w_rzphi * A_Rzphi / (sig_Rzphi[:, None] + eps)
+    U_xy_ = w_xy * A_xy / (sig_xy[:, None] + eps)
+    U_h1_ = w_h * (A_h1 * A_xy) / y_xy_safe[:, None] / (sig_A1[:, None] + eps)
+    U_h2_ = w_h * (A_h2 * A_xy) / y_xy_safe[:, None] / (sig_A2[:, None] + eps)
+    U_h3_ = w_h * (A_h3 * A_xy) / y_xy_safe[:, None] / (sig_A3[:, None] + eps)
+    U_h4_ = w_h * (A_h4 * A_xy) / y_xy_safe[:, None] / (sig_A4[:, None] + eps)
     U = jnp.vstack([U_rz, U_xy_, U_h1_, U_h2_, U_h3_, U_h4_])
 
     n_orb = U.shape[1]
@@ -722,16 +727,16 @@ def solve_nnls_admm_bootstrap(
     alpha = 1.6
 
     # ---- Normalized y_Rzphi (shared, not bootstrapped) ----
-    y_rz_shared = y_Rzphi / (sig_Rzphi + eps)  # (n_Rzphi_bins,)
+    y_rz_shared = w_rzphi * y_Rzphi / (sig_Rzphi + eps)  # (n_Rzphi_bins,)
 
     # ---- Build normalized y vectors for each bootstrap ----
     # y_Rzphi part is the same for all bootstraps; only xy and h1-h4 vary
     def _build_y_vec(y_xy_i, y_h1_i, y_h2_i, y_h3_i, y_h4_i):
-        y_xy_ = y_xy_i / (sig_xy + eps)
-        y_h1_ = y_h1_i / (sig_A1 + eps)
-        y_h2_ = y_h2_i / (sig_A2 + eps)
-        y_h3_ = y_h3_i / (sig_A3 + eps)
-        y_h4_ = y_h4_i / (sig_A4 + eps)
+        y_xy_ = w_xy * y_xy_i / (sig_xy + eps)
+        y_h1_ = w_h * y_h1_i / (sig_A1 + eps)
+        y_h2_ = w_h * y_h2_i / (sig_A2 + eps)
+        y_h3_ = w_h * y_h3_i / (sig_A3 + eps)
+        y_h4_ = w_h * y_h4_i / (sig_A4 + eps)
         return jnp.concatenate([y_rz_shared, y_xy_, y_h1_, y_h2_, y_h3_, y_h4_])
 
     y_vecs = jax.vmap(_build_y_vec)(
@@ -1325,7 +1330,8 @@ def model_fixed_potential_bootstrap(params_halo_pot, dict_phi_baryon, Omega_bar,
     """
 
     # Fixed viewing angles
-    alpha, beta, gamma = 30.0, 20.0, 140.0
+    # alpha, beta, gamma = 30.0, 20.0, 140.0
+    alpha, beta, gamma = dict_data['alpha'], dict_data['beta'], dict_data['gamma']
     rotation_matrix = makeRotationMatrix(alpha, beta, gamma)
 
     w0 = dict_data['w0']
@@ -1406,13 +1412,22 @@ def model_fixed_potential_bootstrap(params_halo_pot, dict_phi_baryon, Omega_bar,
 
     N_step_per_orb = 100
     N_dynamical_time = 50
-    N_max = N_step_per_orb * N_dynamical_time
+    N_max = 5_000 #N_step_per_orb * N_dynamical_time
     T_total_batch = T_orb_batch * N_dynamical_time
     dt_init_batch = T_orb_batch / N_step_per_orb
     atol, rtol = 1e-7, 1e-4
     dt_min, dt_max = 1e-5, 0.3
 
-    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, _ = _integrate_adaptive_batch_vmap(
+    # Rzphi_bin_counts, surface_density, h1, h2, h3, h4, _ = _integrate_adaptive_batch_vmap(
+    #                     w0_new_batch, acc_fn, pot_fn, N_max, T_total_batch,
+    #                     dt_init_batch, -Omega_bar,
+    #                     atol, rtol,     # atol, rtol
+    #                     dt_min, dt_max,      # dt_min, dt_max
+    #                     num_Vbin, bin_mapping, num_per_bin,
+    #                     Rzphi_lim_grid, xy_lim_grid,
+    #                     Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
+    #                     v0, s, rotation_matrix)
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, _ = _integrate_adaptive_batch_chunked_vmap(
                         w0_new_batch, acc_fn, pot_fn, N_max, T_total_batch,
                         dt_init_batch, -Omega_bar,
                         atol, rtol,     # atol, rtol
@@ -1420,7 +1435,9 @@ def model_fixed_potential_bootstrap(params_halo_pot, dict_phi_baryon, Omega_bar,
                         num_Vbin, bin_mapping, num_per_bin,
                         Rzphi_lim_grid, xy_lim_grid,
                         Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
-                        v0, s, rotation_matrix)
+                        v0, s, rotation_matrix,
+                        100
+    )
     # Normalization already done per-orbit inside integrate_adaptive_barred
     A_Rzphi = Rzphi_bin_counts.T
     A_xy = surface_density.T
@@ -1456,7 +1473,11 @@ def model_fixed_potential_bootstrap(params_halo_pot, dict_phi_baryon, Omega_bar,
 
     y_xy = dict_data['XY_density_data'].astype(jnp.float32)
 
-    y_xy = y_xy / light_to_mass_ratio # convert from light to mass
+    y_xy = y_xy / light_to_mass_ratio
+    y_h1 = dict_data['h1_data']
+    y_h2 = dict_data['h2_data']
+    y_h3 = dict_data['h3_data']
+    y_h4 = dict_data['h4_data']
 
     sig_Rzphi = 0.02 * y_Rzphi + 1e-10
     sig_xy = (dict_data['XY_density_data_err'] + EPSILON) / light_to_mass_ratio
@@ -1479,11 +1500,17 @@ def model_fixed_potential_bootstrap(params_halo_pot, dict_phi_baryon, Omega_bar,
     # y_xy_boot is in luminosity units (same as XY_density_data), divided here by
     # light_to_mass_ratio and mean_mass_per_orb to match the original y_xy processing.
     # y_Rzphi is NOT bootstrapped (it's model-computed from density params)
-    y_xy_boot = dict_data['y_xy_boot'] / light_to_mass_ratio / mean_mass_per_orb  # (N_boot, n_xy_bins)
-    y_h1_boot = dict_data['y_h1_boot']                               # (N_boot, n_xy_bins)
-    y_h2_boot = dict_data['y_h2_boot']
-    y_h3_boot = dict_data['y_h3_boot']
-    y_h4_boot = dict_data['y_h4_boot']
+    # y_xy_boot = dict_data['y_xy_boot'] / light_to_mass_ratio / mean_mass_per_orb  # (N_boot, n_xy_bins)
+    # y_h1_boot = dict_data['y_h1_boot']                               # (N_boot, n_xy_bins)
+    # y_h2_boot = dict_data['y_h2_boot']
+    # y_h3_boot = dict_data['y_h3_boot']
+    # y_h4_boot = dict_data['y_h4_boot']
+    y_xy_boot = y_xy[None, :] + dict_data['XY_standard_normal'] * sig_xy[None, :]
+    y_h1_boot = y_h1[None, :] + dict_data['h1_standard_normal'] * sig_A1[None, :]
+    y_h2_boot = y_h2[None, :] + dict_data['h2_standard_normal'] * sig_A2[None, :]
+    y_h3_boot = y_h3[None, :] + dict_data['h3_standard_normal'] * sig_A3[None, :]
+    y_h4_boot = y_h4[None, :] + dict_data['h4_standard_normal'] * sig_A4[None, :]
+
 
     weights_all = solve_nnls_admm_bootstrap(
                             A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,

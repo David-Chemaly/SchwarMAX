@@ -1,3 +1,4 @@
+import numpy as np
 import jax
 import jax.numpy as jnp
 from functools import partial
@@ -278,6 +279,81 @@ def expX_pdf_log(x, a):
     pdf = jnp.log(a) - (x / a)
     return jnp.where(x >= 0, pdf, -jnp.inf)
 
+def compute_transfer_matrix(sigma_psf, nX, nY, X_minmax, Y_minmax,
+                             bin_mapping, total_bins, grid_res=500):
+    """
+    Compute PSF transfer matrix P using grid-based convolution (Option 2).
+
+    P[i,j] = fraction of flux from Voronoi bin j observed in bin i after
+    Gaussian PSF convolution. Columns sum to 1 (flux conservation).
+
+    Parameters
+    ----------
+    sigma_psf : float
+        PSF standard deviation in kpc. If 0, returns identity matrix.
+    nX, nY : int
+        Number of pixels in the regular grid (X and Y directions).
+    X_minmax, Y_minmax : tuple of (float, float)
+        FOV limits (min, max) in kpc for X and Y.
+    bin_mapping : array of int, shape (nX*nY,) or (nX*nY+1,)
+        Maps each regular grid pixel to a Voronoi bin ID.
+        If length nX*nY+1, the last entry is treated as a sentinel and dropped.
+    total_bins : int
+        Number of Voronoi bins.
+    grid_res : int, optional
+        Resolution of the fine grid used for convolution (default 500).
+
+    Returns
+    -------
+    P : ndarray, shape (total_bins, total_bins)
+        PSF transfer matrix.
+    """
+    from scipy.ndimage import gaussian_filter
+
+    bin_mapping = np.asarray(bin_mapping)
+    if len(bin_mapping) == nX * nY + 1:
+        bin_mapping = bin_mapping[:-1]  # drop sentinel
+
+    X_min, X_max = X_minmax
+    Y_min, Y_max = Y_minmax
+
+    if sigma_psf == 0:
+        return np.eye(total_bins)
+
+    # Fine regular grid covering the FOV
+    x_edges = np.linspace(X_min, X_max, grid_res + 1)
+    y_edges = np.linspace(Y_min, Y_max, grid_res + 1)
+    x_c = 0.5 * (x_edges[:-1] + x_edges[1:])
+    y_c = 0.5 * (y_edges[:-1] + y_edges[1:])
+    XX, YY = np.meshgrid(x_c, y_c)  # (grid_res, grid_res)
+
+    # Assign fine grid points to Voronoi bins via the regular grid
+    nx = (XX.ravel() - X_min) / (X_max - X_min)
+    ny = (YY.ravel() - Y_min) / (Y_max - Y_min)
+    ix = np.clip(np.floor(nx * nX).astype(int), 0, nX - 1)
+    iy = np.clip(np.floor(ny * nY).astype(int), 0, nY - 1)
+    fine_bin_ids = bin_mapping[ix + iy * nX].reshape(grid_res, grid_res)
+
+    # PSF sigma in fine-grid pixel units
+    pixel_size = x_edges[1] - x_edges[0]
+    sigma_pix = sigma_psf / pixel_size
+
+    # Build P by convolving indicator images
+    P = np.zeros((total_bins, total_bins))
+    for j in range(total_bins):
+        indicator_j = (fine_bin_ids == j).astype(float)
+        convolved_j = gaussian_filter(indicator_j, sigma=sigma_pix, mode='constant')
+        for i in range(total_bins):
+            P[i, j] = convolved_j[fine_bin_ids == i].sum()
+
+    # Column-normalise (flux conservation)
+    col_sums = P.sum(axis=0)
+    col_sums = np.where(col_sums > 0, col_sums, 1.0)
+    P = P / col_sums[None, :]
+
+    return P
+
+
 @partial(jax.jit,static_argnums=(2))
 def sample_from_logP(x_grid, logP, N, key):
     """
@@ -300,3 +376,56 @@ def sample_from_logP(x_grid, logP, N, key):
     u = jax.random.uniform(key, shape=(N,))
     samples = jnp.interp(u, cdf, x_grid)
     return samples
+
+
+# ── NFW parameter transforms (JAX-compatible) ──────────────────────
+
+@jax.jit
+def logM_logRs_to_logMenc_logc(logM_halo, logRs_halo, r_enc=10.0, Delta=200., rho_crit=277.54):
+    """NFW (logM, logRs) -> (logM_enc(<r_enc), log_concentration)."""
+    M = 10.0 ** logM_halo
+    Rs = 10.0 ** logRs_halo
+    x = r_enc / Rs
+    M_enc = M * (jnp.log(1.0 + x) - x / (1.0 + x))
+    R_vir = (3.0 * M / (4.0 * jnp.pi * Delta * rho_crit)) ** (1.0 / 3.0)
+    c = R_vir / Rs
+    return jnp.log10(M_enc), jnp.log10(c)
+
+
+@jax.jit
+def logMenc_logc_to_logM_logRs(logM_enc, log_c, r_enc=10.0, Delta=200., rho_crit=277.54):
+    """Inverse: (logM_enc(<r_enc), log_concentration) -> (logM, logRs).
+
+    Solves M_enc = M * [ln(1+x) - x/(1+x)] where x = r_enc/Rs and
+    Rs = R_vir/c = (3M/(4 pi Delta rho_crit))^(1/3) / c,
+    using 60 bisection steps (precision ~5/2^60 ≈ 4e-18).
+    """
+    M_enc = 10.0 ** logM_enc
+    c = 10.0 ** log_c
+    coeff = 4.0 * jnp.pi * Delta * rho_crit / 3.0
+
+    def _menc_residual(logM_trial):
+        M = 10.0 ** logM_trial
+        Rs = (M / coeff) ** (1.0 / 3.0) / c
+        x = r_enc / Rs
+        return M * (jnp.log(1.0 + x) - x / (1.0 + x)) - M_enc
+
+    # Bisection: M_enc < M always, so logM in [logM_enc, logM_enc + 5]
+    lo = logM_enc
+    hi = logM_enc + 5.0
+
+    def bisect_step(carry, _):
+        lo, hi = carry
+        mid = 0.5 * (lo + hi)
+        f_mid = _menc_residual(mid)
+        # If f_mid > 0, solution is in [lo, mid]; else [mid, hi]
+        lo = jnp.where(f_mid > 0, lo, mid)
+        hi = jnp.where(f_mid > 0, mid, hi)
+        return (lo, hi), None
+
+    (lo, hi), _ = jax.lax.scan(bisect_step, (lo, hi), None, length=60)
+
+    logM_sol = 0.5 * (lo + hi)
+    M_sol = 10.0 ** logM_sol
+    Rs_sol = (M_sol / coeff) ** (1.0 / 3.0) / c
+    return logM_sol, jnp.log10(Rs_sol)
