@@ -1228,7 +1228,7 @@ def model_bootstrap(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
                         Rzphi_lim_grid, xy_lim_grid,
                         Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
                         v0, s, rotation_matrix,
-                        50
+                        100
     )
     A_Rzphi = Rzphi_bin_counts.T
     A_xy = surface_density.T
@@ -2135,6 +2135,7 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     alpha, beta, gamma = params_disk_rho['alpha'], params_disk_rho['beta'], params_disk_rho['gamma']
     rotation_matrix = makeRotationMatrix(alpha, beta, gamma)
 
+    sigma_amplifier = params_disk_rho['sigma_amplifier']
     #=========================================== BUILD BARYON PARAMS =====================================================
     M_bar = 10.0 ** params_disk_rho['logM_bar']
     L_bar = params_disk_rho['L_bar']
@@ -2183,7 +2184,7 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
         _z
     )
 
-    n_realizations = 2
+    n_realizations = 4
     key = jax.random.PRNGKey(911)
     keys = jax.random.split(key, 6)
     d_scale = 0.1 * jnp.ones(_R.shape)
@@ -2207,6 +2208,7 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     T_orb_batch = T_orb[:, jnp.newaxis].repeat(n_realizations, axis=1)
 
     #=========================================== Integrate orbits =======================================================
+    # Single combined potential + grad for acceleration — one forward + one backward pass
     @jax.jit
     def acc_fn(x, y, z):
         def _pot(pos):
@@ -2225,22 +2227,33 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     Rzphi_n_tot = 360
 
     N_step_per_orb = 100
-    N_dynamical_time = 100
+    N_dynamical_time = 50
     N_max = N_step_per_orb * N_dynamical_time
     T_total_batch = T_orb_batch * N_dynamical_time
     dt_init_batch = T_orb_batch / N_step_per_orb
-    atol, rtol = 1e-6, 1e-4
+    atol, rtol = 1e-7, 1e-4
     dt_min, dt_max = 1e-5, 0.3
 
-    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, _ = _integrate_adaptive_batch_vmap(
+    # Rzphi_bin_counts, surface_density, h1, h2, h3, h4, _ = _integrate_adaptive_batch_vmap(
+    #                     w0_new_batch, acc_fn, pot_fn, N_max, T_total_batch,
+    #                     dt_init_batch, -Omega_bar,
+    #                     atol, rtol,
+    #                     dt_min, dt_max,
+    #                     num_Vbin, bin_mapping, num_per_bin,
+    #                     Rzphi_lim_grid, xy_lim_grid,
+    #                     Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
+    #                     v0, s, rotation_matrix)
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, _ = _integrate_adaptive_batch_chunked_vmap(
                         w0_new_batch, acc_fn, pot_fn, N_max, T_total_batch,
                         dt_init_batch, -Omega_bar,
-                        atol, rtol,
-                        dt_min, dt_max,
+                        atol, rtol,     # atol, rtol
+                        dt_min, dt_max,      # dt_min, dt_max
                         num_Vbin, bin_mapping, num_per_bin,
                         Rzphi_lim_grid, xy_lim_grid,
                         Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
-                        v0, s, rotation_matrix)
+                        v0, s, rotation_matrix,
+                        100
+    )
     A_Rzphi = Rzphi_bin_counts.T
     A_xy = surface_density.T
     A_h1 = h1.T
@@ -2273,20 +2286,19 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     )
 
     y_xy = dict_data['XY_density_data'].astype(jnp.float32)
-    y_h1 = dict_data['h1_data'].astype(jnp.float32)
-    y_h2 = dict_data['h2_data'].astype(jnp.float32)
-    y_h3 = dict_data['h3_data'].astype(jnp.float32)
-    y_h4 = dict_data['h4_data'].astype(jnp.float32)
 
     y_xy = y_xy / params_disk_rho['light_to_mass_ratio']
+    y_h1 = dict_data['h1_data']
+    y_h2 = dict_data['h2_data']
+    y_h3 = dict_data['h3_data']
+    y_h4 = dict_data['h4_data']
 
     sig_Rzphi = 0.02 * y_Rzphi + 1e-10
-    sig_xy = 0.01 * y_xy + 1e-10
-    h_err_min = 0.03
-    sig_A1 = jnp.where(h_err_min > dict_data['h1_data_err'], h_err_min, dict_data['h1_data_err']) + EPSILON
-    sig_A2 = jnp.where(h_err_min > dict_data['h2_data_err'], h_err_min, dict_data['h2_data_err']) + EPSILON
-    sig_A3 = jnp.where(h_err_min > dict_data['h3_data_err'], h_err_min, dict_data['h3_data_err']) + EPSILON
-    sig_A4 = jnp.where(h_err_min > dict_data['h4_data_err'], h_err_min, dict_data['h4_data_err']) + EPSILON
+    sig_xy = (dict_data['XY_density_data_err'] + EPSILON) / params_disk_rho['light_to_mass_ratio']
+    sig_A1 = dict_data['h1_data_err'] + EPSILON
+    sig_A2 = dict_data['h2_data_err'] + EPSILON
+    sig_A3 = dict_data['h3_data_err'] + EPSILON
+    sig_A4 = dict_data['h4_data_err'] + EPSILON
 
     mean_mass_per_orb = jnp.sum(y_Rzphi) / A_Rzphi.shape[1]
 
@@ -2301,9 +2313,28 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
                             A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
                             y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
                             sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-                            lambda_reg=0.1, maxiter=200,
+                            lambda_reg=1, maxiter=200,
     )
     weights_unity = jnp.ones(A_Rzphi.shape[1], A_Rzphi.dtype) * (jnp.sum(y_Rzphi) / A_Rzphi.shape[1])
+
+    weights_all = jnp.stack([weights, weights_unity], axis=0)
+    y_xy_boot = jnp.stack([y_xy, y_xy], axis=0)
+    y_h1_boot = jnp.stack([y_h1, y_h1], axis=0)
+    y_h2_boot = jnp.stack([y_h2, y_h2], axis=0)
+    y_h3_boot = jnp.stack([y_h3, y_h3], axis=0)
+    y_h4_boot = jnp.stack([y_h4, y_h4], axis=0)
+
+    logl_marg, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_all, m_eff = \
+        compute_model_and_logl_bootstrap(
+            weights_all,
+            A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+            y_Rzphi,
+            y_xy_boot, y_h1_boot, y_h2_boot, y_h3_boot, y_h4_boot,
+            sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+            v0, s, sigma_amplifier, params_disk_rho['light_to_mass_ratio'], mean_mass_per_orb
+        )
+    density_all = density_all * mean_mass_per_orb * params_disk_rho['light_to_mass_ratio']  # convert back to luminosity units for density
+
 
     #===================================== Calculate the net kinematics of the model =========================================
 
@@ -2325,6 +2356,9 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     h4_model = jnp.where(h4_model < -clip_val, -clip_val, h4_model)
 
     V_model, sigma_model = h_to_V_sigma(h1_model, h2_model, v0, s)
+    density_2DXY = density_2DXY * mean_mass_per_orb * params_disk_rho['light_to_mass_ratio']  # convert back to luminosity units for density
+    y_xy = y_xy * mean_mass_per_orb * params_disk_rho['light_to_mass_ratio']  # convert back to luminosity units for density
+    sig_xy = sig_xy * mean_mass_per_orb * params_disk_rho['light_to_mass_ratio']  # convert back to luminosity units for density
 
     density_set = (density_2DXY, y_xy, sig_xy)
     h1_set = (h1_model, y_h1, sig_A1)
@@ -2349,6 +2383,7 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     h4_model_unity = jnp.where(h4_model_unity < -clip_val, -clip_val, h4_model_unity)
 
     V_model_unity, sigma_model_unity = h_to_V_sigma(h1_model_unity, h2_model_unity, v0, s)
+    density_2DXY_unity = density_2DXY_unity * mean_mass_per_orb * params_disk_rho['light_to_mass_ratio']  # convert back to luminosity units for density
 
     density_unity_set = (density_2DXY_unity, y_xy, sig_xy)
     h1_unity_set = (h1_model_unity, y_h1, sig_A1)
@@ -2356,7 +2391,7 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     h3_unity_set = (h3_model_unity, y_h3, sig_A3)
     h4_unity_set = (h4_model_unity, y_h4, sig_A4)
 
-    return density_set, V_model, sigma_model, h1_set, h2_set, h3_set, h4_set,\
+    return logl_all, density_set, V_model, sigma_model, h1_set, h2_set, h3_set, h4_set,\
         density_unity_set, V_model_unity, sigma_model_unity, h1_unity_set, h2_unity_set, h3_unity_set, h4_unity_set,\
               weights
 

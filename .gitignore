@@ -1,2 +1,6 @@
 *.pickle
 /discBar
+*.pdf
+*.png
+*.jpg
+*.pyc

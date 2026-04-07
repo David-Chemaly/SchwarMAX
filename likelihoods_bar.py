@@ -363,11 +363,14 @@ def logl_angular_input_bootstrap(params, dict_data, num_Vbin):
         - Shared Cholesky, vmapped ADMM solves
         - logL_marg = log(mean(exp(logL_i)))
     """
+    logM_enc = params[0]
+    log_c = params[3]
+    logM_halo, logRs_halo = logMenc_logc_to_logM_logRs(logM_enc, log_c, r_enc=10.0, Delta=200., rho_crit=277.54)
 
-    logM_halo = params[0]
+    # logM_halo = params[0]
     logM_disc = params[1]
     logM_bar = params[2]
-    logRs_halo = params[3]
+    # logRs_halo = params[3]
     logRs_disk = params[4]
     logHs_disk = params[5]
     logL_bar = params[6]
@@ -453,7 +456,7 @@ def logl_angular_input_bootstrap(params, dict_data, num_Vbin):
         logl = jax.lax.cond(nan_in_weights, _true_func, _false_func)
         return logl
 
-    val = jax.lax.cond(logl_density < logl_density_max - 100, true_func, false_func)
+    val = jax.lax.cond(logl_density < logl_density_max - 1000, true_func, false_func)
     return val
 
 @partial(jax.jit, static_argnames=('num_Vbin'))

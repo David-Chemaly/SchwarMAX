@@ -93,7 +93,32 @@ rmh_sigma_init = jnp.array([
 # ── Helper: build sampler from proposal ──────────────────────────────
 def build_sampler(proposal):
     rw = blackjax.additive_step_random_walk(logdensity_fn, proposal)
-    return jax.vmap(rw.step)
+    return jax.vmap(rw.step), jax.vmap(rw.init)
+
+N_HALF = N_CHAINS // 2  # each vmap batch size
+
+def _split_pytree(tree):
+    """Split a pytree of (N_CHAINS, ...) arrays into two halves."""
+    return (jax.tree.map(lambda x: x[:N_HALF], tree),
+            jax.tree.map(lambda x: x[N_HALF:], tree))
+
+def _merge_pytree(tree0, tree1):
+    """Merge two pytree halves back into (N_CHAINS, ...)."""
+    return jax.tree.map(lambda a, b: jnp.concatenate([a, b], axis=0), tree0, tree1)
+
+def batched_init(vmap_init, positions):
+    """Initialise states in two batches to avoid OOM."""
+    states_0 = vmap_init(positions[:N_HALF])
+    states_1 = vmap_init(positions[N_HALF:])
+    return _merge_pytree(states_0, states_1)
+
+def batched_step(vmap_step, keys, states):
+    """Run one MCMC step in two batches to avoid OOM."""
+    states_0, states_1 = _split_pytree(states)
+    keys_0, keys_1 = keys[:N_HALF], keys[N_HALF:]
+    new_states_0, infos_0 = vmap_step(keys_0, states_0)
+    new_states_1, infos_1 = vmap_step(keys_1, states_1)
+    return _merge_pytree(new_states_0, new_states_1), _merge_pytree(infos_0, infos_1)
 
 # ── Initial positions ────────────────────────────────────────────────
 def make_init_positions(rng_key):
@@ -151,17 +176,13 @@ def run_mcmc(resume=True):
 
         # Reconstruct states from last saved positions/logprob
         last_positions = jnp.array(all_positions[-1])
-        rw_init = blackjax.additive_step_random_walk(
-            logdensity_fn, blackjax.mcmc.random_walk.normal(rmh_sigma_init))
-        states = jax.vmap(rw_init.init)(last_positions)
-
-        # Rebuild proposal from saved Cholesky factor
         if proposal_L is not None:
             proposal = blackjax.mcmc.random_walk.normal(
                 jnp.array(proposal_L * scale_factor))
         else:
             proposal = blackjax.mcmc.random_walk.normal(rmh_sigma_init)
-        vmap_step = build_sampler(proposal)
+        vmap_step, vmap_init = build_sampler(proposal)
+        states = batched_init(vmap_init, last_positions)
 
         print(f"Resumed from step {start_step}, {len(all_positions)} samples, "
               f"adapt_count={adapt_count}, scale_factor={scale_factor:.3f}")
@@ -170,13 +191,11 @@ def run_mcmc(resume=True):
         rng_key, init_key = jax.random.split(rng_key)
         positions = make_init_positions(init_key)
 
-        print(f"Initialising {N_CHAINS} chains...")
-        rw_init = blackjax.additive_step_random_walk(
-            logdensity_fn, blackjax.mcmc.random_walk.normal(rmh_sigma_init))
-        states = jax.vmap(rw_init.init)(positions)
+        print(f"Initialising {N_CHAINS} chains in 2 batches of {N_HALF}...")
+        proposal_init = blackjax.mcmc.random_walk.normal(rmh_sigma_init)
+        vmap_step, vmap_init = build_sampler(proposal_init)
+        states = batched_init(vmap_init, positions)
         print(f"  Init done.")
-
-        vmap_step = build_sampler(blackjax.mcmc.random_walk.normal(rmh_sigma_init))
         all_positions = []
         all_logprob = []
         start_step = 0
@@ -198,7 +217,7 @@ def run_mcmc(resume=True):
         rng_key, step_key = jax.random.split(rng_key)
         keys = jax.random.split(step_key, N_CHAINS)
 
-        states, infos = vmap_step(keys, states)
+        states, infos = batched_step(vmap_step, keys, states)
 
         all_positions.append(np.array(states.position))
         all_logprob.append(np.array(states.logdensity))
@@ -224,17 +243,17 @@ def run_mcmc(resume=True):
                     L = np.linalg.cholesky(proposal_cov)
                     proposal_L = L
 
-                    # Adjust scale based on recent acceptance
-                    recent_acc = np.mean(recent_accepts)
-                    if recent_acc < 0.15:
-                        scale_factor *= 0.8
-                    elif recent_acc > 0.35:
-                        scale_factor *= 1.2
-                    scale_factor = np.clip(scale_factor, 0.1, 5.0)
+                    # # Adjust scale based on recent acceptance
+                    # recent_acc = np.mean(recent_accepts)
+                    # if recent_acc < 0.15:
+                    #     scale_factor *= 0.8
+                    # elif recent_acc > 0.35:
+                    #     scale_factor *= 1.2
+                    # scale_factor = np.clip(scale_factor, 0.1, 5.0)
 
                     proposal = blackjax.mcmc.random_walk.normal(
                         jnp.array(L * scale_factor))
-                    vmap_step = build_sampler(proposal)
+                    vmap_step, _ = build_sampler(proposal)
                     adapt_count += 1
 
                     tqdm.write(

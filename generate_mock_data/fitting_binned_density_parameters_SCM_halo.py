@@ -93,7 +93,7 @@ if __name__ == "__main__":
     sample_mc_y = jax.scipy.special.ndtri(sample_mc[1:,1]) * 30
     sample_mc_z = jax.scipy.special.ndtri(sample_mc[1:,2]) * 30
 
-    posvel, mass = agama.readSnapshot(data_folder+'/Bar_model_TG21/model/t_t0_4')
+    posvel, mass = agama.readSnapshot(data_folder+'/Bar_model_TG21/model/t_t0_7')
     mask = (mass==np.unique(mass)[-1])
     posvel = posvel[mask]
     mass = mass[mask]

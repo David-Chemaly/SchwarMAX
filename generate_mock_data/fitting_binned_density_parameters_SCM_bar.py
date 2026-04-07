@@ -1,4 +1,5 @@
-path = '/home/hz420/python_script/SchwarMAX/'
+# path = '/home/hz420/python_script/SchwarMAX/'
+path = '/Users/hanyuan/Dropbox/python_script/SchwarMAX/'
 
 import sys
 sys.path.append(path)
@@ -22,7 +23,8 @@ import astropy.units as u
 
 from multiprocessing import Pool, cpu_count
 from functools import partial
-path = '/home/hz420/python_script/SchwarMAX/'
+# path = '/home/hz420/python_script/SchwarMAX/'
+# path = '/Users/hanyuan/Dropbox/python_script/SchwarMAX/'
 
 import sys
 sys.path.append(path)
@@ -242,7 +244,8 @@ if __name__ == "__main__":
     sample_mc_y = jax.scipy.special.ndtri(sample_mc[1:,1]) * 8
     sample_mc_z = jax.scipy.special.ndtri(sample_mc[1:,2]) * 3
 
-    posvel, mass = agama.readSnapshot(f'/data/hz420-2/SchwarMAX/Bar_model_TG21/model/t_t0_2.5')
+    data_folder = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data'
+    posvel, mass = agama.readSnapshot(data_folder + f'/Bar_model_TG21/model/t_t0_7')
     mask = (mass!=np.unique(mass)[-1])
     posvel = posvel[mask]
     mass = mass[mask]
@@ -381,7 +384,7 @@ if __name__ == "__main__":
     final_params = samples
     pd.DataFrame(
         final_params, columns=['log10_Rd','log10_hz','log10_rho0','log10_M','log10_Rs','log10_p','log10_q']
-        ).to_csv('/data/hz420-2/SchwarMAX/Bar_model_TG21/model/best_fit_params_binned_stars.csv', index=False)
+        ).to_csv(data_folder + '/Bar_model_TG21/model/best_fit_params_binned_stars.csv', index=False)
 
     # final_params = pd.read_csv('/data/hz420-2/SchwarMAX/SCM_disc/model/best_fit_params.csv').to_numpy()
 
@@ -397,7 +400,7 @@ if __name__ == "__main__":
                 show_titles=True, title_fmt='.2f', title_kwargs={"fontsize": 15},
                 smooth=True, quantiles=[0.16, 0.5, 0.84], fig=fig)
     ########################
-    fig.savefig('/data/hz420-2/SchwarMAX/Bar_model_TG21/model/bar_posterior.png')
+    fig.savefig(data_folder + '/Bar_model_TG21/model/bar_posterior.png')
     ########################
 
     best_fit_param = np.percentile(samples_plot, 50, axis=0)

@@ -397,35 +397,42 @@ def logMenc_logc_to_logM_logRs(logM_enc, log_c, r_enc=10.0, Delta=200., rho_crit
     """Inverse: (logM_enc(<r_enc), log_concentration) -> (logM, logRs).
 
     Solves M_enc = M * [ln(1+x) - x/(1+x)] where x = r_enc/Rs and
-    Rs = R_vir/c = (3M/(4 pi Delta rho_crit))^(1/3) / c,
-    using 60 bisection steps (precision ~5/2^60 ≈ 4e-18).
+    Rs = R_vir/c = (3M/(4 pi Delta rho_crit))^(1/3) / c.
+
+    Uses Newton's method (6 iterations, quadratic convergence).
     """
     M_enc = 10.0 ** logM_enc
     c = 10.0 ** log_c
     coeff = 4.0 * jnp.pi * Delta * rho_crit / 3.0
+    ln10 = jnp.log(10.0)
 
-    def _menc_residual(logM_trial):
+    def _residual_and_deriv(logM_trial):
         M = 10.0 ** logM_trial
         Rs = (M / coeff) ** (1.0 / 3.0) / c
         x = r_enc / Rs
-        return M * (jnp.log(1.0 + x) - x / (1.0 + x)) - M_enc
+        f_nfw = jnp.log(1.0 + x) - x / (1.0 + x)
+        f = M * f_nfw - M_enc
 
-    # Bisection: M_enc < M always, so logM in [logM_enc, logM_enc + 5]
-    lo = logM_enc
-    hi = logM_enc + 5.0
+        # df/d(logM) via chain rule:
+        #   d/d(logM) = d/dM * dM/d(logM) = d/dM * M * ln(10)
+        #   dRs/dM = Rs / (3M)
+        #   dx/dM = -x / (3M)
+        #   d(f_nfw)/dx = x / (1+x)^2
+        #   d(M*f_nfw)/dM = f_nfw + M * d(f_nfw)/dx * dx/dM
+        #                 = f_nfw - x^2 / (3*(1+x)^2)
+        df_dM = f_nfw - x * x / (3.0 * (1.0 + x) ** 2)
+        df = df_dM * M * ln10
+        return f, df
 
-    def bisect_step(carry, _):
-        lo, hi = carry
-        mid = 0.5 * (lo + hi)
-        f_mid = _menc_residual(mid)
-        # If f_mid > 0, solution is in [lo, mid]; else [mid, hi]
-        lo = jnp.where(f_mid > 0, lo, mid)
-        hi = jnp.where(f_mid > 0, mid, hi)
-        return (lo, hi), None
+    # Initial guess: logM_enc + 0.5 (M is typically 1–10x M_enc)
+    logM = logM_enc + 0.5
 
-    (lo, hi), _ = jax.lax.scan(bisect_step, (lo, hi), None, length=60)
+    def newton_step(logM, _):
+        f, df = _residual_and_deriv(logM)
+        return logM - f / df, None
 
-    logM_sol = 0.5 * (lo + hi)
+    logM_sol, _ = jax.lax.scan(newton_step, logM, None, length=6)
+
     M_sol = 10.0 ** logM_sol
     Rs_sol = (M_sol / coeff) ** (1.0 / 3.0) / c
     return logM_sol, jnp.log10(Rs_sol)

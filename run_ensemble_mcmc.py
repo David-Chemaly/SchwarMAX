@@ -27,7 +27,7 @@ from likelihoods_bar import logl_angular_input_bootstrap
 # ── Configuration ────────────────────────────────────────────────────
 path = '/Users/hanyuan/Dropbox/python_script/SchwarMAX/'
 
-N_WALKERS = 32             # must be even and >= 2*NDIM
+N_WALKERS = 40             # must be even and >= 2*NDIM
 N_STEPS = 3000
 CHECKPOINT_EVERY = 50
 BURNIN = 500
@@ -252,14 +252,14 @@ def ensemble_step(rng_key, positions, logp):
 
 # ── Initial positions ────────────────────────────────────────────────
 def make_init_positions(rng_key):
-    """Start walkers near best-fit with small perturbation."""
+    """Start walkers spread across a broad region around the best-fit.
+
+    Uses ~30% of the prior width per parameter so walkers explore widely
+    from the start — the starting point may not be the true mode.
+    """
     p0 = jnp.array(res)
-    init_spread = jnp.array([
-        0.02, 0.02, 0.02, 0.01,
-        0.01, 0.01, 0.01,
-        0.01, 0.01, 0.02,
-        0.02, 0.01, 0.02,
-    ])
+    # Spread = 30% of prior half-width per parameter
+    init_spread = 0.3 * (BOUNDS_HI - BOUNDS_LO) / 2.0
     noise = jax.random.normal(rng_key, shape=(N_WALKERS, NDIM)) * init_spread[None, :]
     positions = p0[None, :] + noise
     positions = jnp.clip(positions, BOUNDS_LO[None, :], BOUNDS_HI[None, :])
@@ -310,7 +310,11 @@ def run_ensemble(resume=True):
         positions = make_init_positions(init_key)
 
         print(f"Initialising {N_WALKERS} walkers...")
-        logp = _vmap_logdensity(positions)
+        n_half = N_WALKERS // 2
+        logp = jnp.concatenate([
+            _vmap_logdensity(positions[:n_half]),
+            _vmap_logdensity(positions[n_half:]),
+        ])
         print(f"  Init done. logP: mean={float(jnp.mean(logp)):.1f}, "
               f"max={float(jnp.max(logp)):.1f}")
 
