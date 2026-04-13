@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import jax.numpy.linalg as jnn
 
 from constants import EPSILON
-from model import model, projection, model_fixed_potential, model_fixed_potential_bootstrap, model_fixed_potential_bootstrap_both
+from model import model, projection, model_fixed_potential, model_fixed_potential_bootstrap, model_fixed_potential_bootstrap_amp
 from functools import partial
 
 from densities import DoubleExponentialDisk_density
@@ -422,8 +422,88 @@ def logl_fixed_potential_bootstrap(params, dict_phi_baryon, dict_data, num_Vbin)
     Omega_bar = 10 ** log_Omega_bar
     light_to_mass_ratio = 10 ** log_light_to_mass_ratio
 
+    X_minmax = dict_data['X_minmax']
+    Y_minmax = dict_data['Y_minmax']
+    nX, nY = dict_data['nX_nY']
+    xy_lim_grid = jnp.array([X_minmax, Y_minmax])
+    xy_n_grid = jnp.array([nX, nY])
+    Rmin, Rmax = dict_data['R_minmax']
+    zmin, zmax = dict_data['z_minmax']
+    phimin, phimax = dict_data['phi_minmax']
+
     weights_all, _logl_marg, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_all, _m_eff = \
-        model_fixed_potential_bootstrap(params_halo_pot, dict_phi_baryon, Omega_bar, light_to_mass_ratio, dict_data, num_Vbin)
+        model_fixed_potential_bootstrap(params_halo_pot, dict_phi_baryon, 
+                                        Omega_bar, light_to_mass_ratio, 
+                                        dict_data, num_Vbin,
+                                        Rzphi_lim_grid=jnp.array([[Rmin, Rmax],[zmin, zmax],[phimin, phimax]]),
+                                        xy_lim_grid=xy_lim_grid,
+                                        xy_n_grid=xy_n_grid)
+    
+
+    def _true_func():
+        return -jnp.inf
+    def _false_func():
+        return _logl_marg - _m_eff
+
+    nan_in_weights = jnp.isnan(weights_all).any()
+    val = jax.lax.cond(nan_in_weights, _true_func, _false_func)
+    return val, _m_eff
+
+@partial(jax.jit, static_argnames=('num_Vbin'))
+def logl_fixed_potential_bootstrap_amp(params, dict_phi_baryon, params_halo, dict_data, num_Vbin):
+    """
+    Log-likelihood for Schwarzschild model with fixed baryonic potential.
+
+    Free parameters (4):
+        params[0] = logM_halo       (log10 solar masses)
+        params[1] = logRs_halo      (log10 kpc)
+        params[2] = log_light_to_mass_ratio
+        params[3] = log_Omega_bar   (log10 rad/Gyr)
+
+    Fixed:
+        - Baryonic potential: dict_phi_baryon (pre-computed CylindricalSpline)
+        - Viewing angles: alpha=30, beta=20, gamma=140 deg
+    """
+    logM_halo = params_halo[0]
+    logRs_halo = params_halo[1]
+    log_light_to_mass_ratio = params[0]
+    log_Omega_bar = params[1]
+    log_amplifier = params[2]
+
+    params_halo_pot = {
+        'logM': logM_halo,
+        'Rs': 10 ** logRs_halo,
+        'a': 1.0,
+        'b': 1.0,
+        'c': 1.0,
+        'x_origin': 0.0,
+        'y_origin': 0.0,
+        'z_origin': 0.0,
+        'dirx': 0.0,
+        'diry': 0.0,
+        'dirz': 1.0
+    }
+
+    Omega_bar = 10 ** log_Omega_bar
+    light_to_mass_ratio = 10 ** log_light_to_mass_ratio
+    sigma_amplifier = 10 ** log_amplifier
+
+    X_minmax = dict_data['X_minmax']
+    Y_minmax = dict_data['Y_minmax']
+    nX, nY = dict_data['nX_nY']
+    xy_lim_grid = jnp.array([X_minmax, Y_minmax])
+    xy_n_grid = jnp.array([nX, nY])
+    Rmin, Rmax = dict_data['R_minmax']
+    zmin, zmax = dict_data['z_minmax']
+    phimin, phimax = dict_data['phi_minmax']
+
+    weights_all, _logl_marg, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_all, _m_eff = \
+        model_fixed_potential_bootstrap_amp(params_halo_pot, dict_phi_baryon, 
+                                        Omega_bar, light_to_mass_ratio, sigma_amplifier,
+                                        dict_data, num_Vbin,
+                                        Rzphi_lim_grid=jnp.array([[Rmin, Rmax],[zmin, zmax],[phimin, phimax]]),
+                                        xy_lim_grid=xy_lim_grid,
+                                        xy_n_grid=xy_n_grid)
     
 
     def _true_func():

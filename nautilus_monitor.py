@@ -19,11 +19,8 @@ path = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data/'
 sys.path.append(path)
 
 checkpoint_file = path + 'nautilus_checkpoint.hdf5'
-ndim = 13
+ndim = 3
 param_names = [
-    'logM_halo', 'logM_disc', 'logM_bar', 'logRs_halo',
-    'logRs_disk', 'logHs_disk', 'logL_bar',
-    'alpha', 'beta', 'gamma',
     'log_L2M', 'log_Omega', 'log_sigma',
 ]
 
@@ -39,13 +36,9 @@ try:
 except (FileNotFoundError, KeyError):
     print("WARNING: Could not load prior bounds. Using fallback.")
     import jax.numpy as jnp
-    gt = [11.6, 10.71, 9.96, 1.28, 0.59, 0.02, 0.55,
-          0.79, 0.30, 2.36, 0.0, 1.5, -2.0]
-    prior_low = np.array([gt[0]-1, gt[1]-0.5, gt[2]-0.5, gt[3]-1, gt[4]-0.5,
-                           gt[5]-0.5, gt[6]-0.5, 0, 0, 0, -1, 0.5, -4])
-    prior_high = np.array([gt[0]+1, gt[1]+0.5, gt[2]+0.5, gt[3]+1, gt[4]+0.5,
-                            gt[5]+0.5, gt[6]+0.5, float(jnp.pi), float(jnp.pi/2),
-                            float(jnp.pi), 1, 2, -0.5])
+    gt = [0.0, 1.5, 0.5]
+    prior_low = np.array([gt[0]-1, gt[1]-0.5, gt[2]-0.5])
+    prior_high = np.array([gt[0]+1, gt[1]+0.5, gt[2]+0.5])
 
 def prior_transform(u):
     return prior_low + (prior_high - prior_low) * u

@@ -24,13 +24,16 @@ import multiprocessing as mp
 
 from potentials import NFW_potential, NFW_acceleration, MiyamotoNagai_potential, MiyamotoNagai_acceleration
 from integrants_with_binning import *
-from integrants_with_binning import _integrate_barred_vmap, _integrate_batch_vmap, _integrate_adaptive_batch_vmap, _integrate_adaptive_batch_chunked_vmap
+from integrants_with_binning import _integrate_barred_vmap, _integrate_batch_vmap, _integrate_adaptive_batch_vmap, _integrate_adaptive_batch_chunked_vmap, _integrate_adaptive_withtraj_batch_vmap
 from ghMoments import *
 from utils import *
 from constants import EPSILON, G
 
 from densities import MiyamotoNagai_density
 from dehnen_bar import T3_density, T3_acceleration, T3_potential, V4_density, V4_acceleration, V4_potential
+
+# from CylindricalSpline import get_phi_m, get_acc, evaluate_phi_axisymmetric, evaluate_phi, get_density
+
 
 path = '../SchwarMAX/'
 
@@ -111,6 +114,25 @@ def potential_func(x, y, z, params_baryon, params_halo):
 
     return phi_halo + phi_mn + phi_t3 + phi_v4
 
+@jax.jit
+def density_from_potential(x, y, z, dict_phi, d=0.01):
+    """
+    Reconstruct mass density from a CylindricalSpline potential dict
+    via the Poisson equation: rho = nabla^2 Phi / (4 pi G),
+    using finite differences for the Laplacian.
+
+    Much cheaper than get_density() (which uses jax.hessian) because
+    it only needs 7 forward evaluate_phi calls per point, rather than
+    tracing through the full autodiff graph twice.
+    """
+    from constants import G
+    phi_c = evaluate_phi(x, y, z, dict_phi)
+    laplacian = (
+        (evaluate_phi(x+d, y, z, dict_phi) - 2*phi_c + evaluate_phi(x-d, y, z, dict_phi)) / (d*d)
+      + (evaluate_phi(x, y+d, z, dict_phi) - 2*phi_c + evaluate_phi(x, y-d, z, dict_phi)) / (d*d)
+      + (evaluate_phi(x, y, z+d, dict_phi) - 2*phi_c + evaluate_phi(x, y, z-d, dict_phi)) / (d*d)
+    )
+    return laplacian / (4 * jnp.pi * G)
 
 @jax.jit
 def dPhi_dz(x, y, z, params_baryon, params_halo):
@@ -1095,7 +1117,10 @@ def model(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     return density_set, V_model, sigma_model, h1_set, h2_set, h3_set, h4_set, weights, logl_best
 
 @partial(jax.jit, static_argnames=('num_Vbin'))
-def model_bootstrap(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
+def model_bootstrap(params_halo_pot, params_disk_rho, dict_data, num_Vbin,
+                    Rzphi_lim_grid = jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]]),
+                    xy_lim_grid = jnp.array([[-10.,10.],[-3.,3.]]),
+                    xy_n_grid = jnp.array([60,40])):
 
     w0 = dict_data['w0']
     n_particles = w0.shape[0]
@@ -1196,11 +1221,9 @@ def model_bootstrap(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     def pot_fn(x, y, z):
         return potential_func(x, y, z, params_baryon, params_halo_pot)
 
-    Rzphi_lim_grid = jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]])
-    xy_lim_grid = jnp.array([[-10.,10.],[-3.,3.]])
-    Rzphi_n_grid = jnp.array([10,6,6])
-    xy_n_grid = jnp.array([60,40])
+
     Rzphi_n_tot = 360
+    Rzphi_n_grid = jnp.array([10,6,6])
 
     N_step_per_orb = 100
     N_dynamical_time = 50
@@ -1252,7 +1275,7 @@ def model_bootstrap(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
         phi_samples = phi_grid + (sample[:,2] - 0.5) * dphi
         density_samples = rho_fct(R_samples, z_samples, phi_samples, dict_params)
         mass_tot = jnp.sum(density_samples * R_samples) / sample.shape[0]
-        return mass_tot
+        return mass_tot * dR * dz * dphi
 
     R_grid, dR = dict_data['R_grid'], dict_data['dR']
     z_grid, dz = dict_data['z_grid'], dict_data['dz']
@@ -1331,6 +1354,509 @@ def model_bootstrap(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     return weights_all, logl_marg, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_all, m_eff
 
 
+
+@partial(jax.jit, static_argnames=('num_Vbin'))
+def model_bootstrap_psf(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
+    """
+    Same as model_bootstrap but applies PSF smearing via transfer matrix P.
+
+    Expects dict_data['P_psf'] to contain the (num_Vbin, num_Vbin) PSF transfer
+    matrix. If not present, falls back to identity (no smearing).
+
+    PSF is applied to the orbit library matrices after integration:
+        A_xy_psf = P @ A_xy
+        A_hi_psf = P @ (A_hi * A_xy) / (A_xy_psf + eps)
+    This ensures the existing solver and logL functions work unchanged.
+    """
+
+    w0 = dict_data['w0']
+    n_particles = w0.shape[0]
+    v0 = dict_data['v0']
+    s = dict_data['s']
+    num_per_bin = dict_data['num_per_bin']
+    bin_mapping = dict_data['bin_mapping']
+    Omega_bar = params_disk_rho['Omega_bar']
+    alpha, beta, gamma = params_disk_rho['alpha'], params_disk_rho['beta'], params_disk_rho['gamma']
+    rotation_matrix = makeRotationMatrix(alpha, beta, gamma)
+
+    sigma_density_model = params_disk_rho['sigma_density_model']
+    sigma_kine_model = params_disk_rho['sigma_kine_model']
+    sigma_amplifier = params_disk_rho['sigma_amplifier']
+
+    P_psf = dict_data['P_psf']  # (num_Vbin, num_Vbin)
+
+    #=========================================== BUILD BARYON PARAMS =====================================================
+    M_bar = 10.0 ** params_disk_rho['logM_bar']
+    L_bar = params_disk_rho['L_bar']
+    a_bar = params_disk_rho['a_bar']
+    b_bar = params_disk_rho['b_bar']
+
+    params_baryon = {
+        'logM_disc': params_disk_rho['logM_disc'],
+        'Rs_disc': params_disk_rho['Rs_disc'],
+        'Hs_disc': params_disk_rho['Hs_disc'],
+        'x_origin': params_disk_rho['x_origin'],
+        'y_origin': params_disk_rho['y_origin'],
+        'z_origin': params_disk_rho['z_origin'],
+        'dirx': params_disk_rho['dirx'],
+        'diry': params_disk_rho['diry'],
+        'dirz': params_disk_rho['dirz'],
+        'logM_bar': params_disk_rho['logM_bar'],
+        'L_bar': L_bar,
+        'a_bar': a_bar,
+        'b_bar': b_bar,
+    }
+
+    #=========================================== GET INITIAL VELOCITY ===================================================
+
+    get_jeans_moments_vmap = jax.vmap(get_jeans_moments, in_axes=(0,0,0,None,None,None,None))
+    def get_w0_new(w0, key1, key2, key3, n_particles):
+        jeans_moments = get_jeans_moments_vmap(w0[:,0], w0[:,1], w0[:,2], params_baryon, params_disk_rho, params_halo_pot, 1.)
+        v_rot, sig_R, sig_z, sig_phi = jeans_moments
+        g1, g2, g3 = jax.random.normal(key1, (n_particles,)), jax.random.normal(key2, (n_particles,)), jax.random.normal(key3, (n_particles,))
+        vR = g1 * sig_R
+        vz = g2 * sig_z
+        vphi = v_rot + g3 * sig_phi
+        x, y, vx, vy = getCartesianFromCylindrical_clockwise(jnp.sqrt(w0[:,0]**2 + w0[:,1]**2), jnp.arctan2(w0[:,1], w0[:,0]), vR, vphi)
+        return jnp.array([x, y, w0[:,2], vx, vy, vz]).T
+    key1, key2, key3 = jax.random.PRNGKey(42), jax.random.PRNGKey(109), jax.random.PRNGKey(2026)
+    w0_new = get_w0_new(w0, key1, key2, key3, n_particles)
+
+    #======================================== Calculate orbital timescale =====================================================
+    _R = jnp.sqrt(w0_new[:,0]**2 + w0_new[:,1]**2)
+    _z = w0_new[:,2]
+
+    _Vc = jax.vmap(get_rotation_curve, in_axes=(0, None, None, 0))(
+        _R,
+        potential_func,
+        (params_baryon, params_halo_pot),
+        _z
+    )
+
+    n_realizations = 4
+    key = jax.random.PRNGKey(911)
+    keys = jax.random.split(key, 6)
+    d_scale = 0.1 * jnp.ones(_R.shape)
+    v_scale = 0.1 * _Vc
+    v_scale = jnp.clip(v_scale, a_min=1, a_max = 15)
+    noise_x = (jax.random.uniform(keys[0], (n_particles, n_realizations,)) - 0.5) * d_scale[:, jnp.newaxis]
+    noise_y = (jax.random.uniform(keys[1], (n_particles, n_realizations,)) - 0.5) * d_scale[:, jnp.newaxis]
+    noise_z = (jax.random.uniform(keys[2], (n_particles, n_realizations,)) - 0.5) * d_scale[:, jnp.newaxis]
+    noise_vx = (jax.random.uniform(keys[3], (n_particles, n_realizations,)) - 0.5) * v_scale[:, jnp.newaxis]
+    noise_vy = (jax.random.uniform(keys[4], (n_particles, n_realizations,)) - 0.5) * v_scale[:, jnp.newaxis]
+    noise_vz = (jax.random.uniform(keys[5], (n_particles, n_realizations,)) - 0.5) * v_scale[:, jnp.newaxis]
+
+    w0_new_batch = w0_new[:, jnp.newaxis, :]
+    w0_new_batch = w0_new_batch + jnp.stack([noise_x, noise_y, noise_z, noise_vx, noise_vy, noise_vz], axis=-1)
+    T_orb = jax.vmap(estimate_orbital_timescale, in_axes=(0, None, None, 0))(
+        _R,
+        potential_func,
+        (params_baryon, params_halo_pot),
+        _z
+    )
+    T_orb_batch = T_orb[:, jnp.newaxis].repeat(n_realizations, axis=1)
+
+    #=========================================== Integrate orbits =======================================================
+    @jax.jit
+    def acc_fn(x, y, z):
+        def _pot(pos):
+            return potential_func(pos[0], pos[1], pos[2], params_baryon, params_halo_pot)
+        grad_phi = jax.grad(_pot)(jnp.array([x, y, z]))
+        return -grad_phi
+
+    @jax.jit
+    def pot_fn(x, y, z):
+        return potential_func(x, y, z, params_baryon, params_halo_pot)
+
+    Rzphi_lim_grid = jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]])
+    xy_lim_grid = jnp.array([[-10.,10.],[-3.,3.]])
+    Rzphi_n_grid = jnp.array([10,6,6])
+    xy_n_grid = jnp.array([60,40])
+    Rzphi_n_tot = 360
+
+    N_step_per_orb = 100
+    N_dynamical_time = 50
+    N_max = N_step_per_orb * N_dynamical_time
+    T_total_batch = T_orb_batch * N_dynamical_time
+    dt_init_batch = T_orb_batch / N_step_per_orb
+    atol, rtol = 1e-7, 1e-4
+    dt_min, dt_max = 1e-5, 0.3
+
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, _ = _integrate_adaptive_batch_chunked_vmap(
+                        w0_new_batch, acc_fn, pot_fn, N_max, T_total_batch,
+                        dt_init_batch, -Omega_bar,
+                        atol, rtol,
+                        dt_min, dt_max,
+                        num_Vbin, bin_mapping, num_per_bin,
+                        Rzphi_lim_grid, xy_lim_grid,
+                        Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
+                        v0, s, rotation_matrix,
+                        100
+    )
+    A_Rzphi = Rzphi_bin_counts.T
+    A_xy = surface_density.T
+    A_h1 = h1.T
+    A_h2 = h2.T
+    A_h3 = h3.T
+    A_h4 = h4.T
+
+    #=========================================== Apply PSF smearing =====================================================
+    # Flux-weight h moments, apply P, then un-weight so the existing solver interface works.
+    # Goal: solver sees A_h_psf such that (A_h_psf * A_xy_psf) = P @ (A_h_raw * A_xy_raw)
+    eps_psf = 1e-10
+    A_xy_psf = P_psf @ A_xy
+    A_h1_fw = P_psf @ (A_h1 * A_xy)
+    A_h2_fw = P_psf @ (A_h2 * A_xy)
+    A_h3_fw = P_psf @ (A_h3 * A_xy)
+    A_h4_fw = P_psf @ (A_h4 * A_xy)
+    A_h1 = A_h1_fw / (A_xy_psf + eps_psf)
+    A_h2 = A_h2_fw / (A_xy_psf + eps_psf)
+    A_h3 = A_h3_fw / (A_xy_psf + eps_psf)
+    A_h4 = A_h4_fw / (A_xy_psf + eps_psf)
+    A_xy = A_xy_psf
+
+    #================================== Preprocess the obtained matrices ============================================
+
+    @jax.jit
+    def density_func_Rz(R, z, phi, params):
+        x = R * jnp.cos(phi)
+        y = R * jnp.sin(phi)
+        return density_func(x, y, z, params)
+
+    @partial(jax.jit, static_argnames=['rho_fct'])
+    def get_mass(R_grid, z_grid, phi_grid, rho_fct, dict_params, dR, dz, dphi, sample):
+        R_samples = R_grid + (sample[:,0] - 0.5) * dR
+        z_samples = z_grid + (sample[:,1] - 0.5) * dz
+        phi_samples = phi_grid + (sample[:,2] - 0.5) * dphi
+        density_samples = rho_fct(R_samples, z_samples, phi_samples, dict_params)
+        mass_tot = jnp.sum(density_samples * R_samples) / sample.shape[0]
+        return mass_tot
+
+    R_grid, dR = dict_data['R_grid'], dict_data['dR']
+    z_grid, dz = dict_data['z_grid'], dict_data['dz']
+    phi_grid, dphi = dict_data['phi_grid'], dict_data['dphi']
+    y_Rzphi = jax.vmap(get_mass, in_axes=[0, 0, 0, None, None, None, None, None, None])(
+                R_grid, z_grid, phi_grid, density_func_Rz, params_disk_rho, dR, dz, dphi, dict_data['sample_for_integration']
+    )
+
+    y_xy = dict_data['XY_density_data'].astype(jnp.float32)
+
+    y_xy = y_xy / params_disk_rho['light_to_mass_ratio']
+    y_h1 = dict_data['h1_data']
+    y_h2 = dict_data['h2_data']
+    y_h3 = dict_data['h3_data']
+    y_h4 = dict_data['h4_data']
+
+    sig_Rzphi = 0.02 * y_Rzphi + 1e-10
+    sig_xy = (dict_data['XY_density_data_err'] + EPSILON) / params_disk_rho['light_to_mass_ratio']
+    sig_A1 = dict_data['h1_data_err'] + EPSILON
+    sig_A2 = dict_data['h2_data_err'] + EPSILON
+    sig_A3 = dict_data['h3_data_err'] + EPSILON
+    sig_A4 = dict_data['h4_data_err'] + EPSILON
+
+    sig_xy = jnp.sqrt(sig_xy**2 + (sigma_density_model*y_xy)**2)
+    sig_A1 = jnp.sqrt(sig_A1**2 + (sigma_kine_model)**2)
+    sig_A2 = jnp.sqrt(sig_A2**2 + (sigma_kine_model)**2)
+    sig_A3 = jnp.sqrt(sig_A3**2 + (sigma_kine_model)**2)
+    sig_A4 = jnp.sqrt(sig_A4**2 + (sigma_kine_model)**2)
+
+    mean_mass_per_orb = jnp.sum(y_Rzphi) / A_Rzphi.shape[1]
+
+    y_xy = y_xy / mean_mass_per_orb
+    sig_xy = sig_xy / mean_mass_per_orb
+    y_Rzphi = y_Rzphi / mean_mass_per_orb
+    sig_Rzphi = sig_Rzphi / mean_mass_per_orb
+
+    #=========================================== Bootstrap NNLS solver (vmapped) ============================================
+
+    y_xy_boot = y_xy[None, :] + dict_data['XY_standard_normal'] * sig_xy[None, :]
+    y_h1_boot = y_h1[None, :] + dict_data['h1_standard_normal'] * sig_A1[None, :]
+    y_h2_boot = y_h2[None, :] + dict_data['h2_standard_normal'] * sig_A2[None, :]
+    y_h3_boot = y_h3[None, :] + dict_data['h3_standard_normal'] * sig_A3[None, :]
+    y_h4_boot = y_h4[None, :] + dict_data['h4_standard_normal'] * sig_A4[None, :]
+
+    weights_all = solve_nnls_admm_bootstrap(
+                            A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+                            y_Rzphi, y_xy,
+                            y_xy_boot, y_h1_boot, y_h2_boot, y_h3_boot, y_h4_boot,
+                            sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+                            lambda_reg=1, maxiter=200,
+    )
+
+    #===================================== Compute model vectors + logL for each bootstrap ==================================
+
+    logl_marg, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_all, m_eff = \
+        compute_model_and_logl_bootstrap(
+            weights_all,
+            A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+            y_Rzphi,
+            y_xy_boot, y_h1_boot, y_h2_boot, y_h3_boot, y_h4_boot,
+            sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+            v0, s, sigma_amplifier, params_disk_rho['light_to_mass_ratio'], mean_mass_per_orb
+        )
+    density_all = density_all * mean_mass_per_orb * params_disk_rho['light_to_mass_ratio']
+
+    return weights_all, logl_marg, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_all, m_eff
+
+def model_diagnostic(params_halo_pot, params_disk_rho, dict_data, num_Vbin,
+                     Rzphi_lim_grid=jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]]),
+                     xy_lim_grid=jnp.array([[-10.,10.],[-3.,3.]]),
+                     xy_n_grid=jnp.array([60,40]),
+                     batch_size=500):
+    """
+    Run the Schwarzschild model and return orbit weights + full 6D trajectories.
+
+    First calls model_bootstrap to get NNLS orbit weights, then re-integrates
+    the same orbits (same ICs, same potential) to store their full phase-space
+    trajectories for post-processing (velocity maps, orbit classification, etc.).
+
+    Parameters
+    ----------
+    params_halo_pot, params_disk_rho, dict_data, num_Vbin :
+        Same as model_bootstrap.
+    batch_size : int
+        Number of orbits to integrate simultaneously for trajectory storage.
+        Smaller = less memory. Default 500.
+
+    Returns
+    -------
+    weights : (n_orbits,)
+        NNLS orbit weights from the first (unperturbed) bootstrap.
+    y_traj : (n_orbits, N_max, 6)
+        Full 6D phase-space trajectory for each orbit in the bar frame.
+    dt_traj : (n_orbits, N_max)
+        Time-step at each scan iteration (0 for rejected steps).
+    t_traj : (n_orbits, N_max)
+        Cumulative time at each iteration.
+    valid : (n_orbits,)
+        1.0 for orbits that pass energy conservation check.
+    rotation_matrix : (3, 3)
+        Rotation matrix used for sky-plane projection.
+    Omega_bar : float
+        Bar pattern speed.
+    logl_marg : scalar
+        Marginalised log-likelihood from model_bootstrap.
+    """
+    w0 = dict_data['w0']
+    n_particles = w0.shape[0]
+    v0 = dict_data['v0']
+    s = dict_data['s']
+    num_per_bin = dict_data['num_per_bin']
+    bin_mapping = dict_data['bin_mapping']
+    Omega_bar = params_disk_rho['Omega_bar']
+    alpha, beta, gamma = params_disk_rho['alpha'], params_disk_rho['beta'], params_disk_rho['gamma']
+    rotation_matrix = makeRotationMatrix(alpha, beta, gamma)
+
+    sigma_amplifier = params_disk_rho['sigma_amplifier']
+
+    #=========================================== BUILD BARYON PARAMS =====================================================
+    # Derive bar parameters
+    M_bar = 10.0 ** params_disk_rho['logM_bar']
+    L_bar = params_disk_rho['L_bar']
+    a_bar = params_disk_rho['a_bar']
+    b_bar = params_disk_rho['b_bar']
+
+    params_baryon = {
+        'logM_disc': params_disk_rho['logM_disc'],
+        'Rs_disc': params_disk_rho['Rs_disc'],
+        'Hs_disc': params_disk_rho['Hs_disc'],
+        'x_origin': params_disk_rho['x_origin'],
+        'y_origin': params_disk_rho['y_origin'],
+        'z_origin': params_disk_rho['z_origin'],
+        'dirx': params_disk_rho['dirx'],
+        'diry': params_disk_rho['diry'],
+        'dirz': params_disk_rho['dirz'],
+        'logM_bar': params_disk_rho['logM_bar'],
+        'L_bar': L_bar,
+        'a_bar': a_bar,
+        'b_bar': b_bar,
+    }
+
+    #=========================================== GET INITIAL VELOCITY ===================================================
+
+    get_jeans_moments_vmap = jax.vmap(get_jeans_moments, in_axes=(0,0,0,None,None,None,None))
+    def get_w0_new(w0, key1, key2, key3, n_particles):
+        jeans_moments = get_jeans_moments_vmap(w0[:,0], w0[:,1], w0[:,2], params_baryon, params_disk_rho, params_halo_pot, 1.)
+        v_rot, sig_R, sig_z, sig_phi = jeans_moments
+        g1, g2, g3 = jax.random.normal(key1, (n_particles,)), jax.random.normal(key2, (n_particles,)), jax.random.normal(key3, (n_particles,))
+        vR = g1 * sig_R
+        vz = g2 * sig_z
+        vphi = v_rot + g3 * sig_phi
+        x, y, vx, vy = getCartesianFromCylindrical_clockwise(jnp.sqrt(w0[:,0]**2 + w0[:,1]**2), jnp.arctan2(w0[:,1], w0[:,0]), vR, vphi)
+        return jnp.array([x, y, w0[:,2], vx, vy, vz]).T
+    key1, key2, key3 = jax.random.PRNGKey(42), jax.random.PRNGKey(109), jax.random.PRNGKey(2026)
+    w0_new = get_w0_new(w0, key1, key2, key3, n_particles)
+
+    #======================================== Calculate orbital timescale =====================================================
+    _R = jnp.sqrt(w0_new[:,0]**2 + w0_new[:,1]**2)
+    _z = w0_new[:,2]
+
+    _Vc = jax.vmap(get_rotation_curve, in_axes=(0, None, None, 0))(
+        _R,
+        potential_func,
+        (params_baryon, params_halo_pot),
+        _z
+    )
+
+    n_realizations = 1
+    key = jax.random.PRNGKey(911)
+    keys = jax.random.split(key, 6)
+    d_scale = 0.1 * jnp.ones(_R.shape)
+    v_scale = 0.1 * _Vc
+    v_scale = jnp.clip(v_scale, a_min=1, a_max = 15)
+    noise_x = (jax.random.uniform(keys[0], (n_particles, n_realizations,)) - 0.5) * d_scale[:, jnp.newaxis]
+    noise_y = (jax.random.uniform(keys[1], (n_particles, n_realizations,)) - 0.5) * d_scale[:, jnp.newaxis]
+    noise_z = (jax.random.uniform(keys[2], (n_particles, n_realizations,)) - 0.5) * d_scale[:, jnp.newaxis]
+    noise_vx = (jax.random.uniform(keys[3], (n_particles, n_realizations,)) - 0.5) * v_scale[:, jnp.newaxis]
+    noise_vy = (jax.random.uniform(keys[4], (n_particles, n_realizations,)) - 0.5) * v_scale[:, jnp.newaxis]
+    noise_vz = (jax.random.uniform(keys[5], (n_particles, n_realizations,)) - 0.5) * v_scale[:, jnp.newaxis]
+
+    w0_new_batch = w0_new[:, jnp.newaxis, :]
+    w0_new_batch = w0_new_batch + jnp.stack([noise_x, noise_y, noise_z, noise_vx, noise_vy, noise_vz], axis=-1)
+    T_orb = jax.vmap(estimate_orbital_timescale, in_axes=(0, None, None, 0))(
+        _R,
+        potential_func,
+        (params_baryon, params_halo_pot),
+        _z
+    )
+    T_orb_batch = T_orb[:, jnp.newaxis].repeat(n_realizations, axis=1)
+
+    #=========================================== Integrate orbits =======================================================
+    # Single combined potential + grad for acceleration — one forward + one backward pass
+    @jax.jit
+    def acc_fn(x, y, z):
+        def _pot(pos):
+            return potential_func(pos[0], pos[1], pos[2], params_baryon, params_halo_pot)
+        grad_phi = jax.grad(_pot)(jnp.array([x, y, z]))
+        return -grad_phi
+
+    @jax.jit
+    def pot_fn(x, y, z):
+        return potential_func(x, y, z, params_baryon, params_halo_pot)
+
+
+    Rzphi_n_tot = 360
+    Rzphi_n_grid = jnp.array([10,6,6])
+
+    N_step_per_orb = 100
+    N_dynamical_time = 50
+    N_max = N_step_per_orb * N_dynamical_time
+    T_total_batch = T_orb_batch * N_dynamical_time
+    dt_init_batch = T_orb_batch / N_step_per_orb
+    atol, rtol = 1e-7, 1e-4
+    dt_min, dt_max = 1e-5, 0.3
+
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, _, y_traj, t_traj = _integrate_adaptive_withtraj_batch_vmap(
+                        w0_new_batch, acc_fn, pot_fn, N_max, T_total_batch,
+                        dt_init_batch, -Omega_bar,
+                        atol, rtol,
+                        dt_min, dt_max,
+                        num_Vbin, bin_mapping, num_per_bin,
+                        Rzphi_lim_grid, xy_lim_grid,
+                        Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
+                        v0, s, rotation_matrix)
+
+    A_Rzphi = Rzphi_bin_counts.T
+    A_xy = surface_density.T
+    A_h1 = h1.T
+    A_h2 = h2.T
+    A_h3 = h3.T
+    A_h4 = h4.T
+
+    #================================== Preprocess the obtained matrices ============================================
+
+    @jax.jit
+    def density_func_Rz(R, z, phi, params):
+        x = R * jnp.cos(phi)
+        y = R * jnp.sin(phi)
+        return density_func(x, y, z, params)
+
+    @partial(jax.jit, static_argnames=['rho_fct'])
+    def get_mass(R_grid, z_grid, phi_grid, rho_fct, dict_params, dR, dz, dphi, sample):
+        R_samples = R_grid + (sample[:,0] - 0.5) * dR
+        z_samples = z_grid + (sample[:,1] - 0.5) * dz
+        phi_samples = phi_grid + (sample[:,2] - 0.5) * dphi
+        density_samples = rho_fct(R_samples, z_samples, phi_samples, dict_params)
+        mass_tot = jnp.sum(density_samples * R_samples) / sample.shape[0]
+        return mass_tot * dR * dz * dphi
+
+    R_grid, dR = dict_data['R_grid'], dict_data['dR']
+    z_grid, dz = dict_data['z_grid'], dict_data['dz']
+    phi_grid, dphi = dict_data['phi_grid'], dict_data['dphi']
+    y_Rzphi = jax.vmap(get_mass, in_axes=[0, 0, 0, None, None, None, None, None, None])(
+                R_grid, z_grid, phi_grid, density_func_Rz, params_disk_rho, dR, dz, dphi, dict_data['sample_for_integration']
+    )
+
+    y_xy = dict_data['XY_density_data'].astype(jnp.float32)
+
+    y_xy = y_xy / params_disk_rho['light_to_mass_ratio']
+    y_h1 = dict_data['h1_data']
+    y_h2 = dict_data['h2_data']
+    y_h3 = dict_data['h3_data']
+    y_h4 = dict_data['h4_data']
+
+    sig_Rzphi = 0.02 * y_Rzphi + 1e-10
+    sig_xy = (dict_data['XY_density_data_err'] + EPSILON) / params_disk_rho['light_to_mass_ratio']
+    sig_A1 = dict_data['h1_data_err'] + EPSILON
+    sig_A2 = dict_data['h2_data_err'] + EPSILON
+    sig_A3 = dict_data['h3_data_err'] + EPSILON
+    sig_A4 = dict_data['h4_data_err'] + EPSILON
+
+    mean_mass_per_orb = jnp.sum(y_Rzphi) / A_Rzphi.shape[1]
+
+    y_xy = y_xy / mean_mass_per_orb
+    sig_xy = sig_xy / mean_mass_per_orb
+    y_Rzphi = y_Rzphi / mean_mass_per_orb
+    sig_Rzphi = sig_Rzphi / mean_mass_per_orb
+
+    #=========================================== Bootstrap NNLS solver (vmapped) ============================================
+
+    y_xy_boot = y_xy[None, :] + dict_data['XY_standard_normal'] * sig_xy[None, :]
+    y_h1_boot = y_h1[None, :] + dict_data['h1_standard_normal'] * sig_A1[None, :]
+    y_h2_boot = y_h2[None, :] + dict_data['h2_standard_normal'] * sig_A2[None, :]
+    y_h3_boot = y_h3[None, :] + dict_data['h3_standard_normal'] * sig_A3[None, :]
+    y_h4_boot = y_h4[None, :] + dict_data['h4_standard_normal'] * sig_A4[None, :]
+
+    weights_all = solve_nnls_admm_bootstrap(
+                            A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+                            y_Rzphi, y_xy,
+                            y_xy_boot, y_h1_boot, y_h2_boot, y_h3_boot, y_h4_boot,
+                            sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+                            lambda_reg=1, maxiter=200,
+    )  # (N_boot, n_orb)
+
+    #===================================== Compute model vectors + logL for each bootstrap ==================================
+
+    logl_marg, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_all, m_eff = \
+        compute_model_and_logl_bootstrap(
+            weights_all,
+            A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+            y_Rzphi,
+            y_xy_boot, y_h1_boot, y_h2_boot, y_h3_boot, y_h4_boot,
+            sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+            v0, s, sigma_amplifier, params_disk_rho['light_to_mass_ratio'], mean_mass_per_orb
+        )
+    density_all = density_all * mean_mass_per_orb * params_disk_rho['light_to_mass_ratio']  # convert back to luminosity units for density
+
+    return {
+        'weights': np.array(weights_all[0]).astype(np.float32),  # (n_orbits,)
+        'y_traj': y_traj.astype(np.float32),  # (n_orbits, N_max, 6)
+        't_traj': t_traj.astype(np.float32),  # (n_orbits, N_max, 6)      # (n_orbits, N_max, 6)
+        'rotation_matrix': np.array(rotation_matrix).astype(np.float32),
+        'Omega_bar': float(Omega_bar),
+        'logl_marg': float(logl_marg),
+        'logl_all': np.array(logl_all).astype(np.float32),
+        'n_particles': n_particles,
+        'n_realizations': n_realizations,
+        'weights_all_boot': np.array(weights_all).astype(np.float32),
+        'V_all': np.array(V_all).astype(np.float32),
+        'sigma_all': np.array(sigma_all).astype(np.float32),
+        'density_all': np.array(density_all).astype(np.float32),
+        'h1_all': np.array(h1_all).astype(np.float32),
+        'h2_all': np.array(h2_all).astype(np.float32),
+        'h3_all': np.array(h3_all).astype(np.float32),
+        'h4_all': np.array(h4_all).astype(np.float32),
+    }
 
 @partial(jax.jit, static_argnames=('num_Vbin'))
 def model_bootstrap_both(params_halo_pot, params_disk_rho, dict_data, num_Vbin):

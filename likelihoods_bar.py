@@ -3,10 +3,11 @@ import jax.numpy as jnp
 import jax.numpy.linalg as jnn
 
 from constants import EPSILON
-from model_bar import model, model_marg, model_bootstrap, projection, density_func, model_test_convergence
+from model_bar import model, model_marg, model_bootstrap, model_bootstrap_psf, projection, density_func, model_test_convergence
 from functools import partial
 
 from utils import *
+from integrants_with_binning import assign_regular_grid
 from constants import KPCGYR_TO_KMS
 
 @jax.jit
@@ -441,11 +442,24 @@ def logl_angular_input_bootstrap(params, dict_data, num_Vbin):
 
     logl_density_max = dict_data['logl_density_max']
 
+    X_minmax = dict_data['X_minmax']
+    Y_minmax = dict_data['Y_minmax']
+    nX, nY = dict_data['nX_nY']
+    xy_lim_grid = jnp.array([X_minmax, Y_minmax])
+    xy_n_grid = jnp.array([nX, nY])
+
+    Rmin, Rmax = dict_data['R_minmax']
+    zmin, zmax = dict_data['z_minmax']
+    phimin, phimax = dict_data['phi_minmax']
+
     def true_func():
         return -jnp.inf
     def false_func():
         weights_all, _logl_marg, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_all, _m_eff = \
-            model_bootstrap(params_halo_pot, params_baryon_rho, dict_data, num_Vbin)
+            model_bootstrap(params_halo_pot, params_baryon_rho, dict_data, num_Vbin,
+                            Rzphi_lim_grid=jnp.array([[Rmin, Rmax],[zmin, zmax],[phimin, phimax]]),
+                            xy_lim_grid=xy_lim_grid,
+                            xy_n_grid=xy_n_grid)
 
         def _true_func():
             return -jnp.inf
@@ -458,6 +472,106 @@ def logl_angular_input_bootstrap(params, dict_data, num_Vbin):
 
     val = jax.lax.cond(logl_density < logl_density_max - 1000, true_func, false_func)
     return val
+
+
+def logl_angular_input_bootstrap_psf(params, dict_data, num_Vbin):
+    """
+    Same as logl_angular_input_bootstrap but applies PSF smearing via model_bootstrap_psf.
+    Expects dict_data['P_psf'] to contain the (num_Vbin, num_Vbin) PSF transfer matrix.
+    """
+    logM_enc = params[0]
+    log_c = params[3]
+    logM_halo, logRs_halo = logMenc_logc_to_logM_logRs(logM_enc, log_c, r_enc=10.0, Delta=200., rho_crit=277.54)
+
+    logM_disc = params[1]
+    logM_bar = params[2]
+    logRs_disk = params[4]
+    logHs_disk = params[5]
+    logL_bar = params[6]
+    alpha = params[7]
+    beta = params[8]
+    gamma = params[9]
+    log_light_to_mass_ratio = params[10]
+    log_Omega_bar = params[11]
+
+    sigma_density_model = 0
+    sigma_kine_model = 0.
+    sigma_amplifier = 10**params[12]
+
+    alpha = alpha * 180 / jnp.pi
+    beta = beta * 180 / jnp.pi
+    gamma = gamma * 180 / jnp.pi
+
+    L_bar = 10.0 ** logL_bar
+    a_bar = L_bar / 5.0
+    Hs_disc = 10.0 ** logHs_disk
+    b_bar = Hs_disc
+
+    params_halo_pot = {
+        'logM': logM_halo,
+        'Rs':10 ** logRs_halo,
+        'a':1.0,
+        'b':1.0,
+        'c':1.0,
+        'x_origin':0.0,
+        'y_origin':0.0,
+        'z_origin':0.0,
+        'dirx':0.0,
+        'diry':0.0,
+        'dirz':1.0
+    }
+
+    params_baryon_rho = {
+        'logM_disc': logM_disc,
+        'Rs_disc': 10 ** logRs_disk,
+        'Hs_disc': Hs_disc,
+        'logM_bar': logM_bar,
+        'L_bar': L_bar,
+        'a_bar': a_bar,
+        'b_bar': b_bar,
+        'light_to_mass_ratio': 10 ** log_light_to_mass_ratio,
+        'Omega_bar': 10 ** log_Omega_bar,
+        'x_origin': 0.0,
+        'y_origin': 0.0,
+        'z_origin': 0.0,
+        'dirx': 0.0,
+        'diry': 0.0,
+        'dirz': 1.0,
+        'alpha': alpha,
+        'beta': beta,
+        'gamma': gamma,
+
+        'sigma_density_model': sigma_density_model,
+        'sigma_kine_model': sigma_kine_model,
+        'sigma_amplifier': sigma_amplifier,
+    }
+
+    surface_density_model = projection(params_baryon_rho, dict_data, num_Vbin)
+    surface_density_gt = dict_data['XY_density_data'] / params_baryon_rho['light_to_mass_ratio']
+
+    chi2 = jnp.sum((surface_density_gt - surface_density_model)**2 / (0.1 * surface_density_gt)**2)
+    logl_density = -0.5 * chi2 / num_Vbin
+
+    logl_density_max = dict_data['logl_density_max']
+
+    def true_func():
+        return -jnp.inf
+    def false_func():
+        weights_all, _logl_marg, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_all, _m_eff = \
+            model_bootstrap_psf(params_halo_pot, params_baryon_rho, dict_data, num_Vbin)
+
+        def _true_func():
+            return -jnp.inf
+        def _false_func():
+            return _logl_marg
+
+        nan_in_weights = jnp.isnan(weights_all).any()
+        logl = jax.lax.cond(nan_in_weights, _true_func, _false_func)
+        return logl
+
+    val = jax.lax.cond(logl_density < logl_density_max - 1000, true_func, false_func)
+    return val
+
 
 @partial(jax.jit, static_argnames=('num_Vbin'))
 def logl_angular_input_bootstrap_with_maps(params, dict_data, num_Vbin):
@@ -827,6 +941,10 @@ def get_dict_data_bootstrap(path, filename, N_BOOTSTRAP = 100, n_samples = 5_000
     with open(path + filename, 'rb') as f:
         bin_dict = pickle.load(f)
 
+    X_minmax = jnp.array(bin_dict['X_minmax'])
+    Y_minmax = jnp.array(bin_dict['Y_minmax'])
+    nX_nY = jnp.array(bin_dict['nX_nY'])
+
     # voronoi binning mapping and data
     num_per_bin = jnp.array(bin_dict['num_per_bin'])
     total_bins = jnp.array(bin_dict['total_bins'])
@@ -902,20 +1020,49 @@ def get_dict_data_bootstrap(path, filename, N_BOOTSTRAP = 100, n_samples = 5_000
     V_standard_normal = jnp.array(V_standard_normal)
     sigma_standard_normal = jnp.array(sigma_standard_normal)
 
+    from scipy.stats import qmc
 
-
-    # df_Rzphi_data = pd.read_csv(path + 'mock_axisymmetric_disc_Rzphi.csv')
-    # Rzphi_density_data = jnp.array(df_Rzphi_data['mass'].to_numpy()).astype(jnp.float32)
-    with open(path + 'mock_axisymmetric_disc_Rzphi.pkl', 'rb') as f:
-        Rzphi_density_data = pickle.load(f)
-
-    R_grid, z_grid, phi_grid = Rzphi_density_data['R_grid'], Rzphi_density_data['z_grid'], Rzphi_density_data['phi_grid']
+    # with open(path + 'mock_axisymmetric_disc_Rzphi.pkl', 'rb') as f:
+    #     Rzphi_density_data = pickle.load(f)
+    # R_grid, z_grid, phi_grid = Rzphi_density_data['R_grid'], Rzphi_density_data['z_grid'], Rzphi_density_data['phi_grid']
+    # dR = np.unique(R_grid)[1] - np.unique(R_grid)[0]
+    # dz = np.unique(z_grid)[1] - np.unique(z_grid)[0]
+    # dphi = np.unique(phi_grid)[1] - np.unique(phi_grid)[0]
+    # sample_for_integration = Rzphi_density_data['sample_for_integration']
+    R_min, R_max =0., 10.
+    z_min, z_max = -3., 3.
+    n_R, n_z, n_phi =10, 6, 6
+    R_edge = jnp.linspace(R_min, R_max, n_R+1)
+    z_edge = jnp.linspace(z_min, z_max, n_z+1)
+    phi_edge = jnp.linspace(-jnp.pi, jnp.pi, n_phi+1)
+    R_mids, z_mids, phi_mids = 0.5 * (R_edge[:-1] + R_edge[1:]), 0.5 * (z_edge[:-1] + z_edge[1:]), 0.5 * (phi_edge[:-1] + phi_edge[1:])
+    dR, dz, dphi = R_edge[1]-R_edge[0], z_edge[1]-z_edge[0], phi_edge[1]-phi_edge[0]
+    R_mids_mesh, z_mids_mesh, phi_mids_mesh = jnp.meshgrid(R_mids, z_mids, phi_mids, indexing='ij')
+    Rzphi_mid_grid = jnp.stack([R_mids_mesh.ravel(), z_mids_mesh.ravel(), phi_mids_mesh.ravel()], axis=-1)  # (n_R*n_z*n_phi, 3)
+    R_grid = Rzphi_mid_grid[:,0]
+    z_grid = Rzphi_mid_grid[:,1]
+    phi_grid = Rzphi_mid_grid[:,2]
     dR = np.unique(R_grid)[1] - np.unique(R_grid)[0]
     dz = np.unique(z_grid)[1] - np.unique(z_grid)[0]
     dphi = np.unique(phi_grid)[1] - np.unique(phi_grid)[0]
-    sample_for_integration = Rzphi_density_data['sample_for_integration']
+    Rzphi_minmax=jnp.array([[R_min, R_max],[z_min, z_max],[-jnp.pi, jnp.pi]])
+    nRzphi=jnp.array([n_R,n_z,n_phi])
+    num_segments_Rzphi=nRzphi.prod()
+    Rzphi_strides = jnp.concatenate([jnp.array([1]), jnp.cumprod(nRzphi[:-1])])
+    Rzphi_grid_indices = assign_regular_grid(Rzphi_mid_grid,
+                                        grid_min=Rzphi_minmax[:,0],
+                                        grid_max=Rzphi_minmax[:,1],
+                                        n_bins=nRzphi,
+                                        strides=Rzphi_strides)
+    _, COUNTS = jnp.unique(Rzphi_grid_indices, return_counts=True)
+    argsort = jnp.argsort(Rzphi_grid_indices)
+    R_grid = R_grid[argsort]
+    z_grid = z_grid[argsort]
+    phi_grid = phi_grid[argsort]
+    sampler = qmc.Sobol(d=3, scramble=False)
+    sample_for_integration = sampler.random_base2(m=10)
 
-    from scipy.stats import qmc
+    
     X_regular_grid, Y_regular_grid = bin_dict['X_regular_grid'], bin_dict['Y_regular_grid']
     dX = jnp.unique(X_regular_grid)[1] - jnp.unique(X_regular_grid)[0]
     dY = jnp.unique(Y_regular_grid)[1] - jnp.unique(Y_regular_grid)[0]
@@ -923,7 +1070,7 @@ def get_dict_data_bootstrap(path, filename, N_BOOTSTRAP = 100, n_samples = 5_000
     sample = sampler.random_base2(m=10)
 
     n_samples = n_samples  # Same number as original data
-    x_grid = np.linspace(0, 12, 1000)
+    x_grid = np.linspace(0., 12., 1000)
     logP_xexp = XexpX_pdf_log(x_grid, 4.0)
     key = jax.random.PRNGKey(10086)
     R_samples = sample_from_logP(x_grid, logP_xexp, n_samples, key)
@@ -984,6 +1131,9 @@ def get_dict_data_bootstrap(path, filename, N_BOOTSTRAP = 100, n_samples = 5_000
         'R_grid': R_grid,
         'z_grid': z_grid,
         'phi_grid': phi_grid,
+        'R_minmax': [R_min, R_max],
+        'z_minmax': [z_min, z_max],
+        'phi_minmax': [-jnp.pi, jnp.pi],
         'dR': dR,
         'dz': dz,
         'dphi': dphi,
@@ -994,6 +1144,10 @@ def get_dict_data_bootstrap(path, filename, N_BOOTSTRAP = 100, n_samples = 5_000
         'dX': dX,
         'dY': dY,
         'sample_for_integration_XY': sample,
+
+        'X_minmax': X_minmax,
+        'Y_minmax': Y_minmax,
+        'nX_nY': nX_nY,
 
         'w0': w0
     }
