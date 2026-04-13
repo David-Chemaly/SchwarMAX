@@ -1411,7 +1411,7 @@ def model_fixed_potential(params_halo_pot, dict_phi_baryon, Omega_bar, light_to_
 def model_fixed_potential_bootstrap(params_halo_pot, dict_phi_baryon, 
                                     Omega_bar, light_to_mass_ratio, 
                                     dict_data, num_Vbin,
-                                    Rzphi_lim_grid = jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]]),
+                                    Rzphi_n_tot = 360, Rzphi_n_grid = jnp.array([10,6,6]), Rzphi_lim_grid = jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]]),
                                     xy_lim_grid = jnp.array([[-10.,10.],[-3.,3.]]),
                                     xy_n_grid = jnp.array([60,40])):
     """
@@ -1515,9 +1515,6 @@ def model_fixed_potential_bootstrap(params_halo_pot, dict_phi_baryon,
         phi_halo = NFW_potential(x, y, z, params_halo_pot)
         phi_baryon = evaluate_phi(x, y, z, dict_phi_baryon)
         return phi_halo + phi_baryon
-
-    Rzphi_n_tot = 360
-    Rzphi_n_grid = jnp.array([10,6,6])
 
     N_step_per_orb = 100
     N_dynamical_time = 50
@@ -1647,7 +1644,7 @@ def model_fixed_potential_bootstrap(params_halo_pot, dict_phi_baryon,
 def model_fixed_potential_bootstrap_amp(params_halo_pot, dict_phi_baryon, 
                                     Omega_bar, light_to_mass_ratio, sigma_amplifier,
                                     dict_data, num_Vbin,
-                                    Rzphi_lim_grid = jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]]),
+                                    Rzphi_n_tot = 360, Rzphi_n_grid = jnp.array([10,6,6]), Rzphi_lim_grid = jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]]),
                                     xy_lim_grid = jnp.array([[-10.,10.],[-3.,3.]]),
                                     xy_n_grid = jnp.array([60,40])):
     """
@@ -1752,8 +1749,6 @@ def model_fixed_potential_bootstrap_amp(params_halo_pot, dict_phi_baryon,
         phi_baryon = evaluate_phi(x, y, z, dict_phi_baryon)
         return phi_halo + phi_baryon
 
-    Rzphi_n_tot = 360
-    Rzphi_n_grid = jnp.array([10,6,6])
 
     N_step_per_orb = 100
     N_dynamical_time = 50

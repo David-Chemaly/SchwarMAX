@@ -103,7 +103,7 @@ def rotate(posvel, angle):
     sina, cosa = np.sin(angle), np.cos(angle)
     return np.array([x*cosa-y*sina, x*sina+y*cosa, z, vx*cosa-vy*sina, vx*sina+vy*cosa, vz]).T
 
-D = 40_000 # kpc, distance to the galaxy
+D = 50_000 # kpc, distance to the galaxy
 pixel_size = 1 # arcsec, pixel size of the IFU observation
 pixel_size_kpc = (pixel_size/3600)*np.pi/180 * D
 print(f"Pixel size in kpc: {pixel_size_kpc:.4f} kpc")
@@ -112,7 +112,7 @@ field_of_view_Y = 40 # arcsec, field of view in Y direction
 field_of_view_X_kpc = (field_of_view_X/3600)*np.pi/180 * D
 field_of_view_Y_kpc = (field_of_view_Y/3600)*np.pi/180 * D
 print(f"Field of view in kpc: {field_of_view_X_kpc:.4f} kpc x {field_of_view_Y_kpc:.4f} kpc")
-PSF = 1 # arcsec, point spread function of the observation
+PSF = 0 # arcsec, point spread function of the observation
 PSF_kpc = (PSF/3600)*np.pi/180 * D
 print(f"PSF in kpc: {PSF_kpc:.4f} kpc")
 
@@ -124,8 +124,8 @@ print(f"Target S/N per Voronoi bin: {target_sn}")
 
 
 
-fig_name = data_folder + f'/plots/mock_Nbody_bar_XY_withRot_Nbins600_beta{beta}_gamma{gamma}_PSF.png'
-filename = path + f'mock_Nbody_bar_XY_withRot_Nbins600_beta{beta}_gamma{gamma}_PSF.pkl'
+fig_name = data_folder + f'/plots/mock_Nbody_bar_XY_withRot_Nbins600_beta{int(beta)}_gamma{int(gamma)}_D{int(D/1000)}.png'
+filename = path + f'mock_Nbody_bar_XY_withRot_Nbins600_beta{int(beta)}_gamma{int(gamma)}_D{int(D/1000)}.pkl'
 print(f"Output figure will be saved to: {fig_name}")
 print(f"Output data will be saved to: {filename}")
 
@@ -139,18 +139,26 @@ w0_data, mass_data = agama.readSnapshot(data_folder+'/Bar_model_TG21/model/t_t0_
 mass_data = mass_data * mass_unit.value
 
 mask = (mass_data!=np.unique(mass_data)[-1])
+
+# R = np.sqrt(w0_data[:,0]**2 + w0_data[:,1]**2)
+# mask = mask & (R < 5)
+# w0_data[:,0] = w0_data[:,0] - np.sum(w0_data[mask,0] * mass_data[mask]) / np.sum(mass_data[mask])
+# w0_data[:,1] = w0_data[:,1] - np.sum(w0_data[mask,1] * mass_data[mask]) / np.sum(mass_data[mask])
+# w0_data[:,2] = w0_data[:,2] - np.sum(w0_data[mask,2] * mass_data[mask]) / np.sum(mass_data[mask])
+# w0_data[:,3] = w0_data[:,3] - np.sum(w0_data[mask,3] * mass_data[mask]) / np.sum(mass_data[mask])
+# w0_data[:,4] = w0_data[:,4] - np.sum(w0_data[mask,4] * mass_data[mask]) / np.sum(mass_data[mask])
+# w0_data[:,5] = w0_data[:,5] - np.sum(w0_data[mask,5] * mass_data[mask]) / np.sum(mass_data[mask])
+
+for r_ap in [10.0, 5.0, 3.0, 2.0]:
+    R = np.sqrt(w0_data[:, 0]**2 + w0_data[:, 1]**2)
+    mask_center = mask & (R < r_ap)
+    m_c = mass_data[mask_center]
+    for col in range(6):
+        w0_data[:, col] -= np.sum(w0_data[mask_center, col] * m_c) / np.sum(m_c)
+
 w0_data = w0_data[mask]
 mass_data = mass_data[mask]
 print(np.unique(mass_data, return_counts=True))
-
-R = np.sqrt(w0_data[:,0]**2 + w0_data[:,1]**2)
-mask = R < 5
-w0_data[:,0] = w0_data[:,0] - np.sum(w0_data[mask,0] * mass_data[mask]) / np.sum(mass_data[mask])
-w0_data[:,1] = w0_data[:,1] - np.sum(w0_data[mask,1] * mass_data[mask]) / np.sum(mass_data[mask])
-w0_data[:,2] = w0_data[:,2] - np.sum(w0_data[mask,2] * mass_data[mask]) / np.sum(mass_data[mask])
-w0_data[:,3] = w0_data[:,3] - np.sum(w0_data[mask,3] * mass_data[mask]) / np.sum(mass_data[mask])
-w0_data[:,4] = w0_data[:,4] - np.sum(w0_data[mask,4] * mass_data[mask]) / np.sum(mass_data[mask])
-w0_data[:,5] = w0_data[:,5] - np.sum(w0_data[mask,5] * mass_data[mask]) / np.sum(mass_data[mask])
 
 w0_data[:,0] = -w0_data[:,0]
 w0_data[:,3] = -w0_data[:,3]

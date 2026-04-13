@@ -355,8 +355,8 @@ def logl_angular_input_marg(params, dict_data, num_Vbin):
     return val
 
 
-@partial(jax.jit, static_argnames=('num_Vbin'))
-def logl_angular_input_bootstrap(params, dict_data, num_Vbin):
+@partial(jax.jit, static_argnames=('num_Vbin', 'Rzphi_n_tot'))
+def logl_angular_input_bootstrap(params, dict_data, num_Vbin, Rzphi_n_tot):
     """
     Same as logl_angular_input but uses model_bootstrap() which marginalizes
     logL over observational noise via bootstrap resampling:
@@ -451,13 +451,15 @@ def logl_angular_input_bootstrap(params, dict_data, num_Vbin):
     Rmin, Rmax = dict_data['R_minmax']
     zmin, zmax = dict_data['z_minmax']
     phimin, phimax = dict_data['phi_minmax']
+    # Rzphi_n_tot = dict_data['Rzphi_n_tot']
+    Rzphi_n_grid = dict_data['Rzphi_n_grid']
 
     def true_func():
         return -jnp.inf
     def false_func():
         weights_all, _logl_marg, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_all, _m_eff = \
             model_bootstrap(params_halo_pot, params_baryon_rho, dict_data, num_Vbin,
-                            Rzphi_lim_grid=jnp.array([[Rmin, Rmax],[zmin, zmax],[phimin, phimax]]),
+                            Rzphi_n_tot, Rzphi_n_grid, Rzphi_lim_grid=jnp.array([[Rmin, Rmax],[zmin, zmax],[phimin, phimax]]),
                             xy_lim_grid=xy_lim_grid,
                             xy_n_grid=xy_n_grid)
 
@@ -1031,7 +1033,8 @@ def get_dict_data_bootstrap(path, filename, N_BOOTSTRAP = 100, n_samples = 5_000
     # sample_for_integration = Rzphi_density_data['sample_for_integration']
     R_min, R_max =0., 10.
     z_min, z_max = -3., 3.
-    n_R, n_z, n_phi =10, 6, 6
+    n_R, n_z, n_phi =10, 6, 10
+    n_tot = int(n_R * n_z * n_phi)
     R_edge = jnp.linspace(R_min, R_max, n_R+1)
     z_edge = jnp.linspace(z_min, z_max, n_z+1)
     phi_edge = jnp.linspace(-jnp.pi, jnp.pi, n_phi+1)
@@ -1134,6 +1137,8 @@ def get_dict_data_bootstrap(path, filename, N_BOOTSTRAP = 100, n_samples = 5_000
         'R_minmax': [R_min, R_max],
         'z_minmax': [z_min, z_max],
         'phi_minmax': [-jnp.pi, jnp.pi],
+        'Rzphi_n_tot': n_tot,
+        'Rzphi_n_grid': jnp.array([n_R, n_z, n_phi]),
         'dR': dR,
         'dz': dz,
         'dphi': dphi,
