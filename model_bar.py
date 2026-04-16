@@ -2645,8 +2645,11 @@ def model_marg(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     return density_set, V_model, sigma_model, h1_set, h2_set, h3_set, h4_set, weights, logl_marg
 
 
-@partial(jax.jit, static_argnames=('num_Vbin'))
-def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
+@partial(jax.jit, static_argnames=('num_Vbin', 'Rzphi_n_tot'))
+def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin,
+                       Rzphi_n_tot=360, Rzphi_n_grid = jnp.array([10,6,6]), Rzphi_lim_grid = jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]]),
+                       xy_lim_grid = jnp.array([[-10.,10.],[-3.,3.]]), xy_n_grid = jnp.array([60,40])
+                    ):
 
     w0 = dict_data['w0']
     n_particles = w0.shape[0]
@@ -2743,11 +2746,11 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     def pot_fn(x, y, z):
         return potential_func(x, y, z, params_baryon, params_halo_pot)
 
-    Rzphi_lim_grid = jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]])
-    xy_lim_grid = jnp.array([[-10.,10.],[-3.,3.]])
-    Rzphi_n_grid = jnp.array([10,6,6])
-    xy_n_grid = jnp.array([60,40])
-    Rzphi_n_tot = 360
+    # Rzphi_lim_grid = jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]])
+    # xy_lim_grid = jnp.array([[-10.,10.],[-3.,3.]])
+    # Rzphi_n_grid = jnp.array([10,6,6])
+    # xy_n_grid = jnp.array([60,40])
+    # Rzphi_n_tot = 360
 
     N_step_per_orb = 100
     N_dynamical_time = 50

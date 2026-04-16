@@ -227,7 +227,8 @@ if __name__ == '__main__':
 
     data_folder = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data'
     figname = data_folder + '/plots/enclosed_mass_data_vs_model.png'
-    CHECKPOINT_FILE = data_folder + '/ensemble_checkpoint_gal2_0406.pkl'
+    # CHECKPOINT_FILE = data_folder + '/ensemble_checkpoint_gal2_0406.pkl'
+    CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_0415_beta25_gamma140_D50_gal2.pkl'
 
     DISCARD = 500
     THIN = 100
@@ -242,7 +243,7 @@ if __name__ == '__main__':
     # ── Load N-body snapshot ──
     mass_unit = 1 / ((G * u.Msun).to(u.kpc * (u.km / u.s)**2))
     w0_data, mass_data = agama.readSnapshot(
-        data_folder + '/Bar_model_TG21/model/t_t0_4')
+        data_folder + '/Bar_model_TG21/model/t_t0_7')
     mass_data = mass_data * mass_unit.value
 
     # Separate components by particle mass
@@ -253,13 +254,25 @@ if __name__ == '__main__':
     mask_halo = mass_data == unique_masses[-1]
     mask_disc = ~mask_halo
 
-    # Center on stellar component
-    R = np.sqrt(w0_data[:, 0]**2 + w0_data[:, 1]**2)
-    mask_center = R < 5
-    for col in range(6):
-        w0_data[:, col] -= np.sum(w0_data[mask_center, col] * mass_data[mask_center]) / np.sum(mass_data[mask_center])
+    # # Center on stellar component
+    # R = np.sqrt(w0_data[:, 0]**2 + w0_data[:, 1]**2)
+    # mask_center = R < 5
+    # for col in range(6):
+    #     w0_data[:, col] -= np.sum(w0_data[mask_center, col] * mass_data[mask_center]) / np.sum(mass_data[mask_center])
 
-    # Flip x-axis convention
+    unique_masses = np.unique(mass_data)
+    mask_halo = mass_data == unique_masses[-1]
+    mask_disc = ~mask_halo
+
+    # Iterative centering on disc particles (shrinking aperture)
+    for r_ap in [5.0]:
+        R = np.sqrt(w0_data[:, 0]**2 + w0_data[:, 1]**2)
+        mask_center = mask_disc & (R < r_ap)
+        m_c = mass_data[mask_center]
+        for col in range(6):
+            w0_data[:, col] -= np.sum(w0_data[mask_center, col] * m_c) / np.sum(m_c)
+
+    # # Flip x-axis convention
     w0_data[:, 0] = -w0_data[:, 0]
     w0_data[:, 3] = -w0_data[:, 3]
 
@@ -302,13 +315,13 @@ if __name__ == '__main__':
     total_16, total_50, total_84 = np.percentile(M_enc_total_all, [16, 50, 84], axis=0)
 
     # ── Plot ──
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharey=True)
 
     # Halo
     ax = axes[0]
     ax.plot(r_plot, M_enc_halo_data, lw=3, color='royalblue', label='N-body')
-    ax.fill_between(r_plot, halo_16, halo_84, color='tomato', alpha=0.2, label=r'Model $1\sigma$')
-    ax.plot(r_plot, halo_50, lw=2, ls='--', color='tomato', label='Model median')
+    # ax.fill_between(r_plot, halo_16, halo_84, color='tomato', alpha=0.2, label=r'Model $1\sigma$')
+    ax.plot(r_plot, halo_50, lw=2, ls='--', color='tomato', label='Model')
     ax.set_xlabel('r [kpc]')
     ax.set_ylabel(r'$M(<r)$ [$M_\odot$]')
     ax.set_title('Dark Matter Halo')
@@ -320,8 +333,8 @@ if __name__ == '__main__':
     # Disc (baryonic)
     ax = axes[1]
     ax.plot(r_plot, M_enc_disc_data, lw=3, color='royalblue', label='N-body')
-    ax.fill_between(r_plot, disc_16, disc_84, color='tomato', alpha=0.2, label=r'Model $1\sigma$')
-    ax.plot(r_plot, disc_50, lw=2, ls='--', color='tomato', label='Model median')
+    # ax.fill_between(r_plot, disc_16, disc_84, color='tomato', alpha=0.2, label=r'Model $1\sigma$')
+    ax.plot(r_plot, disc_50, lw=2, ls='--', color='tomato', label='Model')
     ax.set_xlabel('r [kpc]')
     ax.set_title('Baryonic (Disc + Bar + Bulge)')
     ax.set_xscale('log')
@@ -332,8 +345,8 @@ if __name__ == '__main__':
     # Total
     ax = axes[2]
     ax.plot(r_plot, M_enc_total_data, lw=3, color='royalblue', label='N-body')
-    ax.fill_between(r_plot, total_16, total_84, color='tomato', alpha=0.2, label=r'Model $1\sigma$')
-    ax.plot(r_plot, total_50, lw=2, ls='--', color='tomato', label='Model median')
+    # ax.fill_between(r_plot, total_16, total_84, color='tomato', alpha=0.2, label=r'Model $1\sigma$')
+    ax.plot(r_plot, total_50, lw=2, ls='--', color='tomato', label='Model')
     ax.set_xlabel('r [kpc]')
     ax.set_title('Total')
     ax.set_xscale('log')
@@ -341,7 +354,7 @@ if __name__ == '__main__':
     ax.set(xlim = (0.1, 10))
     ax.legend(frameon=False, fontsize=10)
 
-    fig.suptitle('Enclosed Mass Profile: Model vs N-body', fontsize=14, y=1.02)
+    # fig.suptitle('Enclosed Mass Profile: Model vs N-body', fontsize=14, y=1.02)
     fig.tight_layout()
     fig.savefig(figname, dpi=300, bbox_inches='tight')
     print(f"Saved to {figname}")

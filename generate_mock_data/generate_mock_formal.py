@@ -1,8 +1,25 @@
-path = '/Users/hanyuan/Dropbox/python_script/SchwarMAX/'
-# path = '/home/hz420/python_script/SchwarMAX/'
+import argparse
+import os
 
-data_folder = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data'
-# sim_folder = '/data/hz420-2/SchwarMAX/Bar_model_TG21/model'
+parser = argparse.ArgumentParser(description='Generate mock IFU data from N-body bar simulation')
+parser.add_argument('--D', type=float, default=float(os.environ.get('D', 50000)),
+                    help='Distance to galaxy in kpc (default: 50000)')
+parser.add_argument('--alpha', type=float, default=float(os.environ.get('ALPHA', 10)),
+                    help='Euler angle alpha in degrees (default: 10)')
+parser.add_argument('--beta', type=float, default=float(os.environ.get('BETA', 25)),
+                    help='Euler angle beta in degrees (default: 25)')
+parser.add_argument('--gamma', type=float, default=float(os.environ.get('GAMMA', 170)),
+                    help='Euler angle gamma in degrees (default: 170)')
+parser.add_argument('--path', type=str, default=os.environ.get('SCHWARMAX_PATH', '/Users/hanyuan/Dropbox/python_script/SchwarMAX'),
+                    help='Path to SchwarMAX code')
+parser.add_argument('--data_folder', type=str, default=os.environ.get('DATA_FOLDER', '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data'),
+                    help='Path to data folder')
+parser.add_argument('--no-show', action='store_true',
+                    help='Disable interactive plot display (for batch runs)')
+args = parser.parse_args()
+
+path = args.path
+data_folder = args.data_folder
 
 import sys
 sys.path.append(path)
@@ -17,6 +34,9 @@ import jax.scipy as jsp
 from functools import partial
 from tqdm import tqdm
 import pandas as pd
+import matplotlib
+if args.no_show:
+    matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 plt.rcParams['font.size'] = 12
 
@@ -103,12 +123,12 @@ def rotate(posvel, angle):
     sina, cosa = np.sin(angle), np.cos(angle)
     return np.array([x*cosa-y*sina, x*sina+y*cosa, z, vx*cosa-vy*sina, vx*sina+vy*cosa, vz]).T
 
-D = 50_000 # kpc, distance to the galaxy
+D = int(args.D) # kpc, distance to the galaxy
 pixel_size = 1 # arcsec, pixel size of the IFU observation
 pixel_size_kpc = (pixel_size/3600)*np.pi/180 * D
 print(f"Pixel size in kpc: {pixel_size_kpc:.4f} kpc")
 field_of_view_X = 60 # arcsec, field of view in X direction
-field_of_view_Y = 40 # arcsec, field of view in Y direction
+field_of_view_Y = 20 # arcsec, field of view in Y direction
 field_of_view_X_kpc = (field_of_view_X/3600)*np.pi/180 * D
 field_of_view_Y_kpc = (field_of_view_Y/3600)*np.pi/180 * D
 print(f"Field of view in kpc: {field_of_view_X_kpc:.4f} kpc x {field_of_view_Y_kpc:.4f} kpc")
@@ -116,7 +136,7 @@ PSF = 0 # arcsec, point spread function of the observation
 PSF_kpc = (PSF/3600)*np.pi/180 * D
 print(f"PSF in kpc: {PSF_kpc:.4f} kpc")
 
-alpha, beta, gamma = 10, 25, 170
+alpha, beta, gamma = args.alpha, args.beta, args.gamma
 print(f"Rotation angles (alpha, beta, gamma): ({alpha}°, {beta}°, {gamma}°)")
 
 target_sn = 40
@@ -124,8 +144,8 @@ print(f"Target S/N per Voronoi bin: {target_sn}")
 
 
 
-fig_name = data_folder + f'/plots/mock_Nbody_bar_XY_withRot_Nbins600_beta{int(beta)}_gamma{int(gamma)}_D{int(D/1000)}.png'
-filename = path + f'mock_Nbody_bar_XY_withRot_Nbins600_beta{int(beta)}_gamma{int(gamma)}_D{int(D/1000)}.pkl'
+fig_name = data_folder + f'/plots/mock_Nbody_bar_XY_withRot_Nbins600_beta{int(beta)}_gamma{int(gamma)}_D{int(D/1000)}_gal2.png'
+filename = path + f'/mock_data/mock_Nbody_bar_XY_withRot_Nbins600_beta{int(beta)}_gamma{int(gamma)}_D{int(D/1000)}_gal2.pkl'
 print(f"Output figure will be saved to: {fig_name}")
 print(f"Output data will be saved to: {filename}")
 
@@ -135,7 +155,7 @@ print(f"Output data will be saved to: {filename}")
 # mass_data = data['mass']
 
 mass_unit = 1/((G*u.Msun).to(u.kpc*(u.km/u.s)**2))
-w0_data, mass_data = agama.readSnapshot(data_folder+'/Bar_model_TG21/model/t_t0_4')#snap_t0_3
+w0_data, mass_data = agama.readSnapshot(data_folder+'/Bar_model_TG21/model/t_t0_7')#snap_t0_3
 mass_data = mass_data * mass_unit.value
 
 mask = (mass_data!=np.unique(mass_data)[-1])
@@ -422,14 +442,14 @@ cb7 = ax1[0,3].scatter(df_XY_merged['X_grid'], df_XY_merged['Y_grid'], c= v0[df_
 fig1.colorbar(cb7, ax=ax1[0,3], label='v0')
 ax1[0,3].set_title('v0')
 
-fig1.savefig(fig_name, bbox_inches='tight')
-
 for i in range (0,2):
     for j in range (0,4):
         ax1[i,j].set_aspect('equal')
         ax1[i,j].set_xlabel('X [kpc]')
         ax1[i,j].set_ylabel('Y [kpc]')
         ax1[i,j].contour(xmid, ymid, np.log10(H).T, levels=10, colors='grey', linewidths=2)
+
+fig1.savefig(fig_name, bbox_inches='tight')
 
 fig2, ax2 = plt.subplots(1, 2, figsize=(12,4))
 cb7 = ax2[0].scatter(df_XY_merged['X_grid'], df_XY_merged['Y_grid'], c= v0[df_XY_merged['Vbin_index'].to_numpy()],
@@ -524,8 +544,13 @@ cb7 = ax1[0,3].scatter(df_XY_merged['X_grid'], df_XY_merged['Y_grid'], c= bin_di
 fig1.colorbar(cb7, ax=ax1[0,3], label='s')
 ax1[0,3].set_title('s')
 
+plt.show()
 
 with open(filename, 'wb') as f:
     pickle.dump(bin_dict, f)
 
-plt.show()
+print(f"Saved mock data to: {filename}")
+print(f"Saved figure to: {fig_name}")
+
+if not args.no_show:
+    plt.show()

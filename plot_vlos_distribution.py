@@ -12,6 +12,7 @@ import agama
 from likelihoods_bar import get_dict_data_bootstrap
 agama.setUnits(mass=1, length=1, velocity=1)
 import numpy as np
+import scipy as sp
 import matplotlib.pyplot as plt
 import cmasher as cmr
 import pickle
@@ -20,7 +21,7 @@ from astropy.constants import G
 from constants import KPCGYR_TO_KMS
 
 
-def plot_prettier(dpi=200, fontsize=12, usetex=False):
+def plot_prettier(dpi=200, fontsize=18, usetex=False):
     plt.rcParams['figure.dpi'] = dpi
     plt.rc("savefig", dpi=dpi)
     plt.rc('font', size=fontsize)
@@ -37,7 +38,6 @@ def plot_prettier(dpi=200, fontsize=12, usetex=False):
     plt.rcParams['font.serif'] = ['Times New Roman'] + plt.rcParams['font.serif']
 
 plot_prettier(usetex=False)
-
 
 # ═══════════════════════════════════════════════════════════════════
 #  N-body helpers
@@ -63,10 +63,16 @@ def bar_angle_bar_strength(x, y, R_anulus=np.arange(1, 5, 0.25)):
     R_mid = (R_anulus[:-1] + R_anulus[1:]) / 2
     return R_mid, np.array(bar_angles0), np.array(bar_strength0)
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  2D binned mean v_R
-# ═══════════════════════════════════════════════════════════════════
+def hist_mean_std(vlos_edges, hist):
+    """Compute mean and std from a normalized histogram."""
+    v_mid = 0.5 * (vlos_edges[:-1] + vlos_edges[1:])
+    dv = vlos_edges[1] - vlos_edges[0]
+    norm = np.sum(hist) * dv
+    if norm == 0:
+        return np.nan, np.nan
+    mean = np.sum(v_mid * hist * dv) / norm
+    std = np.sqrt(np.sum((v_mid - mean)**2 * hist * dv) / norm)
+    return mean, std
 
 def vlos_distribution(X, Y, vlos, weight, vlos_edges, X_edges, Y_edges):
     """
@@ -85,76 +91,12 @@ def vlos_distribution(X, Y, vlos, weight, vlos_edges, X_edges, Y_edges):
 
     return vlos_norm
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  Main
-# ═══════════════════════════════════════════════════════════════════
-
-if __name__ == '__main__':
-
-    path = '/Users/hanyuan/Dropbox/python_script/SchwarMAX/'
-    data_folder = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data'
-    figname = data_folder + '/plots/radial_velocity_field.png'
-    orbital_library_file = data_folder + '/best_fit_orbital_library.pkl'
-
-    X_edges = [-5.0, -4.0]
-    Y_edges = [0.5,  1.5]
-    vlos_edges = np.linspace(-100, 300, 81)
+def vlos_distribution_from_orb(lib, vlos_edges, X_edges, Y_edges):
+    """
+    Compute weighted mean radial velocity on a 2D (x, y) grid.
+    v_R = (x * vx + y * vy) / R
+    """
     
-    print("Loading orbital library...")
-    with open(orbital_library_file, 'rb') as f:
-        lib = pickle.load(f)
-    rot_mat = lib['rotation_matrix'] 
-
-    # data_filename = 'mock_Nbody_bar_XY_withRot_Nbins600_beta25_gamma170.pkl'\
-    data_filename = 'mock_Nbody_bar_XY_withRot_gal2_Nbins1000.pkl'
-    dict_data = get_dict_data_bootstrap(path, data_filename, n_samples = 5_000)
-
-    # ── Load N-body snapshot ──
-    mass_unit = 1 / ((G * u.Msun).to(u.kpc * (u.km / u.s)**2))
-    w0_data, mass_data = agama.readSnapshot(
-        data_folder + '/Bar_model_TG21/model/t_t0_4')
-    mass_data = mass_data * mass_unit.value
-
-    unique_masses = np.unique(mass_data)
-    mask_halo = mass_data == unique_masses[-1]
-    mask_disc = ~mask_halo
-
-    # Iterative centering on disc particles (shrinking aperture)
-    for r_ap in [10.0, 5.0, 3.0, 2.0]:
-        R = np.sqrt(w0_data[:, 0]**2 + w0_data[:, 1]**2)
-        mask_center = mask_disc & (R < r_ap)
-        m_c = mass_data[mask_center]
-        for col in range(6):
-            w0_data[:, col] -= np.sum(w0_data[mask_center, col] * m_c) / np.sum(m_c)
-
-    w0_data[:, 0] = -w0_data[:, 0]
-    w0_data[:, 3] = -w0_data[:, 3]
-
-    # Align bar with x-axis
-    R_mid_ba, bar_angles0, _ = bar_angle_bar_strength(
-        w0_data[:, 0], w0_data[:, 1], R_anulus=np.arange(1, 5, 0.1))
-    bar_angle0 = np.mean(bar_angles0[R_mid_ba < 4])
-    w0_data = rotate(w0_data, -bar_angle0)
-
-    # Rotate the N-body data
-    x_data, v_data = w0_data[:,:3], w0_data[:,3:]
-    x_data = (rot_mat @ x_data.T).T
-    v_data = (rot_mat @ v_data.T).T
-    w0_data[:,:3] = x_data
-    w0_data[:,3:] = v_data
-
-    # ── N-body v_R field (disc particles, |z| < 1 kpc for thin disc) ──
-    z_cut = np.abs(w0_data[mask_disc, 2]) < 5.0
-    posvel_disc = w0_data[mask_disc][z_cut]
-    m_disc = mass_data[mask_disc][z_cut]
-    vlos_nbody = vlos_distribution(
-        posvel_disc[:, 0], posvel_disc[:, 2],
-        posvel_disc[:, 4],  m_disc, 
-        vlos_edges, X_edges, Y_edges)
-    
-    # ── Model v_R field ──
-
     w_model = lib['weights']
     x_model = np.array(lib['x_orb'])  # list of (n_time, 3) arrays
     y_model = np.array(lib['y_orb'])
@@ -193,43 +135,211 @@ if __name__ == '__main__':
         posvel_model[:, 4],  w_unity, 
         vlos_edges, X_edges, Y_edges)
 
+    return vlos_model, vlos_unity
 
-    # ── Plot ──
 
-    fig, ax = plt.subplots(1, 3, figsize=(30, 3), gridspec_kw={'width_ratios': [1, 3, 1]})
+# ═══════════════════════════════════════════════════════════════════
+#  Main
+# ═══════════════════════════════════════════════════════════════════
 
-    ax[0].plot(vlos_edges[:-1], vlos_nbody, label='N-body', drawstyle='steps-mid')
-    ax[0].plot(vlos_edges[:-1], vlos_model, label='Model (best fit)', drawstyle='steps-mid')
-    ax[0].plot(vlos_edges[:-1], vlos_unity, label='Model (uniform weights)', drawstyle='steps-mid')
-    ax[0].set_xlabel(r'$v_{\rm los}$ [km/s]')
-    ax[0].set_ylabel(r'Weighted counts')
-    ax[0].set_title('Line-of-sight velocity distribution')
-    # ax[0].legend()
+if __name__ == '__main__':
 
+    fig, ax = plt.subplots(1, 5, figsize=(21, 4),
+                           gridspec_kw={'width_ratios': [1, 1, 2, 1, 1], 'wspace': 0.05})
+
+    STAT_FONTSIZE = 13
+
+    path = '/Users/hanyuan/Dropbox/python_script/SchwarMAX/'
+    data_folder = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data'
+    figname = data_folder + '/plots/vlos_distribution.png'
+    orbital_library_file = data_folder + '/best_fit_orbital_library.pkl'
+    print("Loading orbital library...")
+    with open(orbital_library_file, 'rb') as f:
+        lib = pickle.load(f)
+    rot_mat = lib['rotation_matrix'] 
+
+    orbital_library_file = data_folder + '/best_fit_orbital_library_Omega10.pkl'
+    with open(orbital_library_file, 'rb') as f:
+        lib_10 = pickle.load(f)
+
+    orbital_library_file = data_folder + '/best_fit_orbital_library_Omega40.pkl'
+    with open(orbital_library_file, 'rb') as f:
+        lib_40 = pickle.load(f)
+
+    # data_filename = 'mock_Nbody_bar_XY_withRot_gal2_Nbins1000.pkl'
+    data_filename = 'mock_data/mock_Nbody_bar_XY_withRot_Nbins600_beta25_gamma140_D50_gal2.pkl'
+    dict_data = get_dict_data_bootstrap(path, data_filename, n_samples = 5_000)
+    X_minmax = dict_data['X_minmax']
+    Y_minmax = dict_data['Y_minmax']
     surface_density = dict_data['XY_density_data']
     X_regular_grid = dict_data['X_regular_grid']
     Y_regular_grid = dict_data['Y_regular_grid']
     bin_mapping = dict_data['bin_mapping']
     index_remap = bin_mapping[:-1]
     density_2DXY_data = surface_density[index_remap]
-
-    cb = ax[1].scatter(X_regular_grid, Y_regular_grid, c=density_2DXY_data,
-                    s = 22, cmap=cmr.sepia, marker = 's', norm = 'log',
+    cb = ax[2].scatter(X_regular_grid, Y_regular_grid, c=density_2DXY_data,
+                    s = 40, cmap=cmr.sepia, marker = 's', norm = 'log',
                     vmin = 1e1, vmax = 1e4, rasterized = True)
-    ax[1].set_title(f'Data', fontsize=15)
-    ax[1].set_xlabel('X [kpc]', fontsize=12)
-    ax[1].set_ylabel('Y [kpc]', fontsize=12)
-    ax[1].set_xlim(-10, 10)
-    ax[1].set_ylim(-3, 3)
-    
+    ax[2].set_xlim(X_minmax)
+    ax[2].set_ylim(Y_minmax)
     # Draw a box to indicate the region where vlos distribution is computed
-    rect = plt.Rectangle((X_edges[0], Y_edges[0]), X_edges[1]-X_edges[0], Y_edges[1]-Y_edges[0],
-                         edgecolor='red', facecolor='none', linestyle='--')
-    ax[1].add_patch(rect)
+
+    # ── Load N-body snapshot ──
+    mass_unit = 1 / ((G * u.Msun).to(u.kpc * (u.km / u.s)**2))
+    w0_data, mass_data = agama.readSnapshot(
+        data_folder + '/Bar_model_TG21/model/t_t0_7')
+    mass_data = mass_data * mass_unit.value
+
+    unique_masses = np.unique(mass_data)
+    mask_halo = mass_data == unique_masses[-1]
+    mask_disc = ~mask_halo
+
+    # Iterative centering on disc particles (shrinking aperture)
+    for r_ap in [10.0, 5.0, 3.0, 2.0]:
+        R = np.sqrt(w0_data[:, 0]**2 + w0_data[:, 1]**2)
+        mask_center = mask_disc & (R < r_ap)
+        m_c = mass_data[mask_center]
+        for col in range(6):
+            w0_data[:, col] -= np.sum(w0_data[mask_center, col] * m_c) / np.sum(m_c)
+
+    w0_data[:, 0] = -w0_data[:, 0]
+    w0_data[:, 3] = -w0_data[:, 3]
+
+    # Align bar with x-axis
+    R_mid_ba, bar_angles0, _ = bar_angle_bar_strength(
+        w0_data[:, 0], w0_data[:, 1], R_anulus=np.arange(1, 5, 0.1))
+    bar_angle0 = np.mean(bar_angles0[R_mid_ba < 4])
+    w0_data = rotate(w0_data, -bar_angle0)
+
+    # Rotate the N-body data
+    x_data, v_data = w0_data[:,:3], w0_data[:,3:]
+    x_data = (rot_mat @ x_data.T).T
+    v_data = (rot_mat @ v_data.T).T
+    w0_data[:,:3] = x_data
+    w0_data[:,3:] = v_data
+
+    x, y = w0_data[:, 0], w0_data[:, 1]
+    R, phi = np.sqrt(w0_data[:, 0]**2 + w0_data[:, 1]**2), np.arctan2(w0_data[:, 1], w0_data[:, 0])
+    z, vy = w0_data[:, 2], w0_data[:, 4]
+    XY_stars = np.stack([x, z], axis=-1) # prefect edge-on view
+
+    # Plot contours of the 2D histogram of (x, z) for disc particles
+    X_min, X_max = -12., 12.
+    Y_min, Y_max = -4., 4.
+    nX, nY = 60,40
+    area_XY = ((X_max - X_min)/nX) * ((Y_max - Y_min)/nY)
+    X_edge = np.linspace(X_min, X_max, nX+1)
+    Y_edge = np.linspace(Y_min, Y_max, nY+1)
+    X_mids, Y_mids = 0.5 * (X_edge[:-1] + X_edge[1:]), 0.5 * (Y_edge[:-1] + Y_edge[1:])
+    H, xedge, yedge = np.histogram2d(XY_stars[:, 0], XY_stars[:, 1], bins=[X_edge, Y_edge])
+    signal = H.flatten()
+    noise = np.sqrt(signal + 1)
+    xmid, ymid = 0.5 * (xedge[1:] + xedge[:-1]), 0.5 * (yedge[1:] + yedge[:-1])
+    H = sp.ndimage.gaussian_filter(H, sigma=0.5)
+    for j in range (0,3):
+        ax[2].contour(xmid, ymid, np.log10(H).T, levels=[2.2, 2.8, 3.1, 3.5, 4.], colors='grey', linewidths=1)
 
 
-    # cbar = fig1.colorbar(cb, ax=ax1[i][1])
-    # cbar.set_label(fig_names[i], fontsize=18)
-    # cbar.ax.tick_params(labelsize=14)
+    X_edges = [-3.5, -2.5]
+    Y_edges = [ 0.5,  1.5]
+    vlos_edges = np.linspace(-100, 300, 51)
+    # ── N-body v_R field (disc particles, |z| < 1 kpc for thin disc) ──
+    z_cut = np.abs(w0_data[mask_disc, 2]) < 5.0
+    posvel_disc = w0_data[mask_disc][z_cut]
+    m_disc = mass_data[mask_disc][z_cut]
+    vlos_nbody = vlos_distribution(
+        posvel_disc[:, 0], posvel_disc[:, 2],
+        posvel_disc[:, 4],  m_disc, 
+        vlos_edges, X_edges, Y_edges)
 
-    plt.show()
+    from matplotlib.offsetbox import AnchoredOffsetbox, HPacker, TextArea
+    colors = ['C0', 'black', 'orange', 'purple']
+    def _colored_stat_line(target_ax, y_anchor, label, vals, colors):
+        fs = STAT_FONTSIZE
+        parts = [TextArea(f'{label} = (', textprops=dict(fontsize=fs))]
+        for i, v in enumerate(vals):
+            parts.append(TextArea(f'{v:.0f}', textprops=dict(fontsize=fs, color=colors[i])))#, fontweight='bold'
+            if i < len(vals) - 1:
+                parts.append(TextArea(', ', textprops=dict(fontsize=fs)))
+        parts.append(TextArea(')', textprops=dict(fontsize=fs)))
+        box = HPacker(children=parts, pad=0, sep=0, align='baseline')
+        ab = AnchoredOffsetbox(loc='upper left', child=box, frameon=False,
+                               bbox_to_anchor=(0.02, y_anchor), bbox_transform=target_ax.transAxes)
+        target_ax.add_artist(ab)
+
+    def plot_vlos_panel(panel_ax, X_edges, Y_edges, vlos_edges, rect_color):
+        """Plot vlos distribution for one spatial box on a given axis."""
+        z_cut = np.abs(w0_data[mask_disc, 2]) < 5.0
+        posvel_disc = w0_data[mask_disc][z_cut]
+        m_disc = mass_data[mask_disc][z_cut]
+        vlos_nbody = vlos_distribution(
+            posvel_disc[:, 0], posvel_disc[:, 2],
+            posvel_disc[:, 4], m_disc,
+            vlos_edges, X_edges, Y_edges)
+
+        panel_ax.fill_between(vlos_edges[:-1], 0, vlos_nbody, label='N-body', alpha=0.4, step='mid')
+
+        vlos_model, vlos_unity = vlos_distribution_from_orb(lib, vlos_edges, X_edges, Y_edges)
+        panel_ax.plot(vlos_edges[:-1], vlos_model, label='Model (best fit)', drawstyle='steps-mid', color='black', lw=3)
+        # panel_ax.plot(vlos_edges[:-1], vlos_unity, label='Model (uniform weights)', drawstyle='steps-mid', color='grey')
+
+        vlos_10, _ = vlos_distribution_from_orb(lib_10, vlos_edges, X_edges, Y_edges)
+        panel_ax.plot(vlos_edges[:-1], vlos_10, label='Model (Omega=10)', drawstyle='steps-mid', color='orange', lw=1.5)
+
+        vlos_40, _ = vlos_distribution_from_orb(lib_40, vlos_edges, X_edges, Y_edges)
+        panel_ax.plot(vlos_edges[:-1], vlos_40, label='Model (Omega=40)', drawstyle='steps-mid', color='purple', lw=1.5)
+
+        panel_ax.set_xlabel(r'$v_{\rm los}$ [km/s]')
+        panel_ax.set_ylabel(r'Weighted counts')
+        panel_ax.set_ylim(0, 0.065)
+
+        # Annotate mean and std
+        mu_nb, sig_nb = hist_mean_std(vlos_edges, vlos_nbody)
+        mu_bf, sig_bf = hist_mean_std(vlos_edges, vlos_model)
+        mu_10, sig_10 = hist_mean_std(vlos_edges, vlos_10)
+        mu_40, sig_40 = hist_mean_std(vlos_edges, vlos_40)
+        _colored_stat_line(panel_ax, 1.03, r'$\langle v \rangle$', [mu_nb, mu_bf, mu_10, mu_40], colors)
+        _colored_stat_line(panel_ax, 0.95, r'$\sigma_{v}$', [sig_nb, sig_bf, sig_10, sig_40], colors)
+
+        # Rectangle on map + colored frame
+        rect = plt.Rectangle((X_edges[0], Y_edges[0]), X_edges[1]-X_edges[0], Y_edges[1]-Y_edges[0],
+                             edgecolor=rect_color, facecolor='none', linestyle='--', linewidth=2)
+        ax[2].add_patch(rect)
+        for spine in panel_ax.spines.values():
+            spine.set_edgecolor(rect_color)
+            spine.set_linewidth(2)
+
+    # Red and blue box centers: (-3.0, 1.0) and (-1.8, 0.6)
+    # Direction vector: (1.2, -0.4) per step
+    # Box 0 (green):  center (-4.2, 1.4) — one step left of red
+    plot_vlos_panel(ax[0], [-4.7, -3.7], [0.9, 1.9], np.linspace(-100, 300, 51), 'darkorange')
+    # Box 1 (red):    center (-3.0, 1.0)
+    plot_vlos_panel(ax[1], [-3.5, -2.5], [0.5, 1.5], np.linspace(-100, 300, 51), 'red')
+    # Box 3 (blue):   center (-1.8, 0.6)
+    plot_vlos_panel(ax[3], [-2.3, -1.3], [0.1, 1.1], np.linspace(-200, 350, 51), 'blue')
+    # Box 4 (darkorange): center (-0.6, 0.2) — one step right of blue
+    plot_vlos_panel(ax[4], [-1.1, -0.1], [-0.3, 0.7], np.linspace(-300, 350, 51), 'green')
+
+    # Hide y-axis on all vlos panels and center map
+    for i in [0, 1, 3, 4]:
+        ax[i].set_yticks([])
+        ax[i].set_ylabel('')
+    ax[2].set_yticks([])
+    ax[2].set_ylabel('')
+    ax[2].set_xticks([])
+    ax[2].set_xlabel('')
+
+    # Add a shared legend at the bottom
+    from matplotlib.patches import Patch
+    from matplotlib.lines import Line2D
+    legend_elements = [
+        Patch(facecolor='C0', alpha=0.4, label='N-body'),
+        Line2D([0], [0], color='black', lw=3, label='Model (best fit)'),
+        Line2D([0], [0], color='orange', lw=2, label=r'Model ($\Omega$=10)'),
+        Line2D([0], [0], color='purple', lw=2, label=r'Model ($\Omega$=40)'),
+    ]
+    fig.legend(handles=legend_elements, loc='lower center', ncol=4,
+               frameon=False, fontsize=18, bbox_to_anchor=(0.5, 0.88))
+
+    # plt.show()
+    fig.savefig(figname, bbox_inches='tight')

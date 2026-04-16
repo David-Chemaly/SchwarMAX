@@ -111,7 +111,7 @@ if __name__ == '__main__':
 
     # 2D grid for binning
     lim = 6.0
-    n_bins = 40
+    n_bins = 20
     x_edges = np.linspace(-lim, lim, n_bins + 1)
     y_edges = np.linspace(-lim, lim, n_bins + 1)
     x_mid = 0.5 * (x_edges[:-1] + x_edges[1:])
@@ -120,7 +120,7 @@ if __name__ == '__main__':
     # ── Load N-body snapshot ──
     mass_unit = 1 / ((G * u.Msun).to(u.kpc * (u.km / u.s)**2))
     w0_data, mass_data = agama.readSnapshot(
-        data_folder + '/Bar_model_TG21/model/t_t0_4')
+        data_folder + '/Bar_model_TG21/model/t_t0_7')
     mass_data = mass_data * mass_unit.value
 
     unique_masses = np.unique(mass_data)

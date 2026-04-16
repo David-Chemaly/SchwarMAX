@@ -94,6 +94,21 @@ if __name__ == "__main__":
     sample_mc_z = jax.scipy.special.ndtri(sample_mc[1:,2]) * 30
 
     posvel, mass = agama.readSnapshot(data_folder+'/Bar_model_TG21/model/t_t0_7')
+
+    unique_masses = np.unique(mass)
+    mask_halo = mass == unique_masses[-1]
+    mask_disc = ~mask_halo
+
+    # Iterative centering on disc particles (shrinking aperture)
+    for r_ap in [10.0, 5.0, 3.0, 2.0]:
+        R = np.sqrt(posvel[:, 0]**2 + posvel[:, 1]**2)
+        mask_center = mask_disc & (R < r_ap)
+        m_c = mass[mask_center]
+        for col in range(6):
+            posvel[:, col] -= np.sum(posvel[mask_center, col] * m_c) / np.sum(m_c)
+
+ 
+
     mask = (mass==np.unique(mass)[-1])
     posvel = posvel[mask]
     mass = mass[mask]
@@ -103,7 +118,6 @@ if __name__ == "__main__":
 
     mass_factor = 1/((G*u.Msun).to(u.kpc*(u.km/u.s)**2))
     mass = mass * mass_factor.value
- 
 
     rmax, rmin = 40, 0.1
     mask = (r < rmax) & (r > rmin)

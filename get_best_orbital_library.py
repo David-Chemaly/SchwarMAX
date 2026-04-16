@@ -141,7 +141,7 @@ def get_dict_data_bootstrap(path, filename, N_BOOTSTRAP = 100, n_samples = 5_000
     R_min, R_max =0., 10.
     z_min, z_max = -3., 3.
     phi_min, phi_max = -jnp.pi, jnp.pi
-    n_R, n_z, n_phi =15, 6, 15
+    n_R, n_z, n_phi =10, 6, 10
     n_tot = int(n_R * n_z * n_phi)
     R_edge = jnp.linspace(R_min, R_max, n_R+1)
     z_edge = jnp.linspace(z_min, z_max, n_z+1)
@@ -481,49 +481,16 @@ if __name__ == '__main__':
 
     path = '/Users/hanyuan/Dropbox/python_script/SchwarMAX/'
     data_folder = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data'
-    CHECKPOINT_FILE = data_folder + '/ensemble_checkpoint_gal2_0406.pkl'
-    data_filename = 'mock_Nbody_bar_XY_withRot_gal2_Nbins1000.pkl'
+    # CHECKPOINT_FILE = data_folder + '/ensemble_checkpoint_gal2_0406.pkl'
+    # data_filename = 'mock_Nbody_bar_XY_withRot_gal2_Nbins1000.pkl'
     # data_filename = 'mock_Nbody_bar_XY_withRot_Nbins600_beta25_gamma170.pkl'
 
-    figname = data_folder + '/plots/velocity_quadrupole.png'
+    CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_0415_beta25_gamma140_D50_gal2.pkl'
+    data_filename = 'mock_data/mock_Nbody_bar_XY_withRot_Nbins600_beta25_gamma140_D50_gal2.pkl'
+
     output_filename = data_folder + '/best_fit_orbital_library.pkl'
-    DISCARD = 500
-    THIN = 100
-    m_max = 5
-
-    # Radial bins for Fourier decomposition (sky plane)
-    R_edges = np.linspace(0.5, 6.0, 12)
-
-    # ── Load N-body snapshot ──
-    mass_unit = 1 / ((G * u.Msun).to(u.kpc * (u.km / u.s)**2))
-    w0_data, mass_data = agama.readSnapshot(
-        data_folder + '/Bar_model_TG21/model/t_t0_4')
-    mass_data = mass_data * mass_unit.value
-
-    unique_masses = np.unique(mass_data)
-    mask_halo = mass_data == unique_masses[-1]
-    mask_disc = ~mask_halo
-
-    # Centre on stellar component
-    R = np.sqrt(w0_data[:, 0]**2 + w0_data[:, 1]**2)
-    mask_center = R < 5
-    for col in range(6):
-        w0_data[:, col] -= np.sum(w0_data[mask_center, col] * mass_data[mask_center]) / np.sum(mass_data[mask_center])
-
-    w0_data[:, 0] = -w0_data[:, 0]
-    w0_data[:, 3] = -w0_data[:, 3]
-
-    # Align bar with x-axis
-    R_mid_ba, bar_angles0, _ = bar_angle_bar_strength(
-        w0_data[:, 0], w0_data[:, 1], R_anulus=np.arange(1, 5, 0.1))
-    bar_angle0 = np.mean(bar_angles0[R_mid_ba < 4])
-    w0_data = rotate(w0_data, -bar_angle0)
-
-    # ── N-body velocity Fourier decomposition ──
-    # Use identity rotation for now (bar aligned with x); override with model rotation if known
-    rot_identity = np.eye(3)
-    R_mid_data, k_m_data, phi_m_data = nbody_velocity_fourier(
-        w0_data, mass_data, mask_disc, rot_identity, R_edges, m_max)
+    DISCARD = 300
+    THIN = 1
 
     # ── Model: run diagnostic for best-fit params ──
 
@@ -562,8 +529,8 @@ if __name__ == '__main__':
                     beta,
                     gamma,
                     logLM_best_fit,
-                    # 0.,
                     logOmega_best_fit,
+                    # jnp.log10(40.0).item(),
                     logSigma_amplifier_best_fit
     ]
 
@@ -602,6 +569,7 @@ if __name__ == '__main__':
         'Omega_bar': 10 ** ground_truth[11],
         'sigma_amplifier': 10 ** ground_truth[12],
     }
+    print('Model pattern speed (Omega_bar):', params_disk_rho['Omega_bar'])
 
     surface_density_model = projection(params_disk_rho, dict_data, dict_data['total_bins'])
     surface_density_gt = dict_data['XY_density_data'] / params_disk_rho['light_to_mass_ratio']

@@ -283,9 +283,10 @@ if __name__ == '__main__':
     path = '/Users/hanyuan/Dropbox/python_script/SchwarMAX/'
 
     figname = data_folder+'/plots/bar_strength_data_vs_model.png'
-    CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_gal2_0406.pkl'
+    # CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_gal2_0406.pkl'
+    CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_0415_beta25_gamma140_D50_gal2.pkl'
     
-    DISCARD=500
+    DISCARD=300
     THIN=1
     posterior, logprob, step = load_checkpoint(CHECKPOINT_FILE)
     posterior = posterior[:, logprob[-1, :]>np.amax(logprob[-1, :])-100, :]
@@ -303,20 +304,33 @@ if __name__ == '__main__':
         print(f"{name}: {best_params[i]:.4f}")
 
     mass_unit = 1/((G*u.Msun).to(u.kpc*(u.km/u.s)**2))
-    w0_data, mass_data = agama.readSnapshot(data_folder+'/Bar_model_TG21/model/t_t0_4')#snap_t0_3
+    w0_data, mass_data = agama.readSnapshot(data_folder+'/Bar_model_TG21/model/t_t0_7')#snap_t0_3
     mass_data = mass_data * mass_unit.value
 
 
     print(np.unique(mass_data, return_counts=True))
 
-    R = np.sqrt(w0_data[:,0]**2 + w0_data[:,1]**2)
-    mask = R < 5
-    w0_data[:,0] = w0_data[:,0] - np.sum(w0_data[mask,0] * mass_data[mask]) / np.sum(mass_data[mask])
-    w0_data[:,1] = w0_data[:,1] - np.sum(w0_data[mask,1] * mass_data[mask]) / np.sum(mass_data[mask])
-    w0_data[:,2] = w0_data[:,2] - np.sum(w0_data[mask,2] * mass_data[mask]) / np.sum(mass_data[mask])
-    w0_data[:,3] = w0_data[:,3] - np.sum(w0_data[mask,3] * mass_data[mask]) / np.sum(mass_data[mask])
-    w0_data[:,4] = w0_data[:,4] - np.sum(w0_data[mask,4] * mass_data[mask]) / np.sum(mass_data[mask])
-    w0_data[:,5] = w0_data[:,5] - np.sum(w0_data[mask,5] * mass_data[mask]) / np.sum(mass_data[mask])
+    # R = np.sqrt(w0_data[:,0]**2 + w0_data[:,1]**2)
+    # mask = R < 5
+    # w0_data[:,0] = w0_data[:,0] - np.sum(w0_data[mask,0] * mass_data[mask]) / np.sum(mass_data[mask])
+    # w0_data[:,1] = w0_data[:,1] - np.sum(w0_data[mask,1] * mass_data[mask]) / np.sum(mass_data[mask])
+    # w0_data[:,2] = w0_data[:,2] - np.sum(w0_data[mask,2] * mass_data[mask]) / np.sum(mass_data[mask])
+    # w0_data[:,3] = w0_data[:,3] - np.sum(w0_data[mask,3] * mass_data[mask]) / np.sum(mass_data[mask])
+    # w0_data[:,4] = w0_data[:,4] - np.sum(w0_data[mask,4] * mass_data[mask]) / np.sum(mass_data[mask])
+    # w0_data[:,5] = w0_data[:,5] - np.sum(w0_data[mask,5] * mass_data[mask]) / np.sum(mass_data[mask])
+    
+    unique_masses = np.unique(mass_data)
+    mask_halo = mass_data == unique_masses[-1]
+    mask_disc = ~mask_halo
+
+    # Iterative centering on disc particles (shrinking aperture)
+    for r_ap in [10.0, 5.0, 3.0, 2.0]:
+        R = np.sqrt(w0_data[:, 0]**2 + w0_data[:, 1]**2)
+        mask_center = mask_disc & (R < r_ap)
+        m_c = mass_data[mask_center]
+        for col in range(6):
+            w0_data[:, col] -= np.sum(w0_data[mask_center, col] * m_c) / np.sum(m_c)
+
 
     w0_data[:,0] = -w0_data[:,0]
     w0_data[:,3] = -w0_data[:,3]

@@ -146,14 +146,19 @@ def load_checkpoint(filepath):
 data_folder = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data'
 path = '/Users/hanyuan/Dropbox/python_script/SchwarMAX/'
 # data_filename = 'mock_Nbody_bar_XY_withRot_gal2_Nbins1000.pkl'
-data_filename = 'mock_Nbody_bar_XY_withRot_Nbins600_beta25_gamma170.pkl'
-dict_data = get_dict_data_bootstrap(path, data_filename, n_samples = 5_000)
+data_filename = 'mock_data/mock_Nbody_bar_XY_withRot_Nbins600_beta25_gamma140_D50_gal2.pkl'
+dict_data = get_dict_data_bootstrap(path, data_filename, n_samples = int(7.5e3))
 
-DISCARD = 500        # burn-in steps to discard for corner plot
+with open(path + data_filename, 'rb') as f:
+    bin_dict = pickle.load(f)
+
+
+DISCARD = 300        # burn-in steps to discard for corner plot
 THIN = 1             # thinning factor for corner plot
-CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_gal2_0406.pkl'
+# CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_gal2_0406.pkl'
+CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_0415_beta25_gamma140_D50_gal2.pkl'
 
-figname = data_folder+'/plots/Trail_LM0.png'
+figname = data_folder+'/plots/mock_Nbins600_beta25_gamma140_D50_gal2.png'
 
 param_names = ['logM_halo', 'logM_disk', 'logM_bar', 'logRs_halo', 'logRs_disk', 'logHs_disk', 'logRs_bar', 
                r'$\alpha$', r'$\beta$', r'$\gamma$', 
@@ -190,11 +195,10 @@ ground_truth = [logMhalo_best_fit,
                 beta,
                 gamma,
                 logLM_best_fit,
-                # 0.,
                 logOmega_best_fit,
+                # jnp.log10(15.0).item(),
                 logSigma_amplifier_best_fit
 ]
-
 # ground_truth = [
 #     10.8,
 #     np.float64(10.650968119218467),
@@ -249,6 +253,8 @@ params_disk_rho = {
     'sigma_amplifier': 10 ** ground_truth[12],
 }
 
+print('Pattern speed for this model:', params_disk_rho['Omega_bar'])
+
 surface_density_model = projection(params_disk_rho, dict_data, dict_data['total_bins'])
 surface_density_gt = dict_data['XY_density_data'] / params_disk_rho['light_to_mass_ratio']
 
@@ -256,9 +262,24 @@ chi2 = jnp.sum((surface_density_gt - surface_density_model)**2 / (0.1 * surface_
 _logl_density = -0.5 * chi2 / dict_data['total_bins']
 print(_logl_density)
 
+X_minmax = dict_data['X_minmax']
+Y_minmax = dict_data['Y_minmax']
+nX, nY = dict_data['nX_nY']
+xy_lim_grid = jnp.array([X_minmax, Y_minmax])
+xy_n_grid = jnp.array([nX, nY])
+
+Rmin, Rmax = dict_data['R_minmax']
+zmin, zmax = dict_data['z_minmax']
+phimin, phimax = dict_data['phi_minmax']
+Rzphi_n_tot = dict_data['Rzphi_n_tot']
+Rzphi_n_grid = dict_data['Rzphi_n_grid']
+
 logL, density_set, V_model, sigma_model, h1_set, h2_set, h3_set, h4_set,\
         density_unity_set, _V_model_unity, _sigma_model_unity, h1_unity_set, h2_unity_set, h3_unity_set, h4_unity_set,\
-              weights = model_for_plotting(params_halo_pot, params_disk_rho, dict_data, dict_data['total_bins'])
+              weights = model_for_plotting(params_halo_pot, params_disk_rho, dict_data, dict_data['total_bins'],
+                                           Rzphi_n_tot, Rzphi_n_grid, Rzphi_lim_grid=jnp.array([[Rmin, Rmax],[zmin, zmax],[phimin, phimax]]),
+                                            xy_lim_grid=xy_lim_grid,
+                                            xy_n_grid=xy_n_grid)
 V_model.block_until_ready()
 print('Model Done')
 
@@ -266,7 +287,7 @@ print('logL:', logL)
 
 
 mass_unit = 1/((G*u.Msun).to(u.kpc*(u.km/u.s)**2))
-w0_data, mass_data = agama.readSnapshot(data_folder + '/Bar_model_TG21/model/t_t0_7')
+w0_data, mass_data = agama.readSnapshot(data_folder + '/Bar_model_TG21/model/t_t0_4')
 mass_data = mass_data * mass_unit.value
 
 mask = (mass_data!=np.unique(mass_data)[-1])
@@ -280,16 +301,16 @@ w0_data[:,3] = w0_data[:,3] - np.mean(w0_data[:,3])
 w0_data[:,4] = w0_data[:,4] - np.mean(w0_data[:,4])
 w0_data[:,5] = w0_data[:,5] - np.mean(w0_data[:,5])
 
-w0_data[:,0] = -w0_data[:,0]
-w0_data[:,3] = -w0_data[:,3]
-
 R_mid, bar_angles0, bar_strength0 = bar_angle_bar_strength(w0_data[:,0], w0_data[:,1], R_anulus = np.arange(1,5,0.25))
 bar_angle0 = np.mean(bar_angles0[R_mid<4])
 rot_angle = -bar_angle0
 w0_data = rotate(w0_data, rot_angle)  # rotate to make it anticlockwise
 
+w0_data[:,0] = -w0_data[:,0]
+w0_data[:,3] = -w0_data[:,3]
 
-alpha, beta, gamma = 30, 20, 140
+
+alpha, beta, gamma = bin_dict['orientation']
 rot_mat = makeRotationMatrix(alpha, beta, gamma)
 x_data, v_data = w0_data[:,:3], w0_data[:,3:]
 x_data = (rot_mat @ x_data.T).T
@@ -360,10 +381,10 @@ fig_names = [r'$\Sigma_{\rm *}$ [L$_\odot$/pc$^2$]', r'$V_{\rm los}$ [km/s]', r'
 fig_names_save = ['Surface_density', 'V_los', 'Sigma_V', 'h3', 'h4']
 color_maps = [cmr.sepia, cmr.iceburn,  cmr.amber, cmr.iceburn, cmr.amber]
 vmin_ls = [1e1, -200, 20, -0.2, -0.2]
-vmax_ls = [1e4, 200, 150, 0.2, 0.0]
-vminmax_ls = [0.3, 25, 25, 0.15, 0.15]
+vmax_ls = [1e4, 200, 150, 0.2, 0.1]
+vminmax_ls = [0.15, 25, 25, 0.15, 0.15]
 
-fig1, ax1 = plt.subplots(len(model_batch),3, figsize = (18, 2.5 * len(model_batch)), gridspec_kw={'hspace':0.6, 'wspace':0.3})
+fig1, ax1 = plt.subplots(len(model_batch),3, figsize = (18, 2.5 * len(model_batch)), gridspec_kw={'hspace':0.4, 'wspace':0.3})
 
 for i in range(len(model_batch)):
     
@@ -413,11 +434,11 @@ for i in range(len(model_batch)):
     cb = ax1[i][0].scatter(X_regular_grid, Y_regular_grid, c=model_batch[i],
                     s = 22, cmap=color_maps[i], marker = 's', norm = 'log' if i == 0 else None,
                     vmin = vmin_ls[i], vmax = vmax_ls[i], rasterized = True)
-    ax1[i][0].set_title(f'Model', fontsize=15)
+    ax1[i][0].set_title('Model' if i==0 else '', fontsize=18)
     ax1[i][0].set_xlabel('X [kpc]', fontsize=12)
     ax1[i][0].set_ylabel('Y [kpc]', fontsize=12)
-    ax1[i][0].set_xlim(-10, 10)
-    ax1[i][0].set_ylim(-3, 3)
+    ax1[i][0].set_xlim(X_minmax)
+    ax1[i][0].set_ylim(Y_minmax)
     cbar = fig1.colorbar(cb, ax=ax1[i][0])
     cbar.set_label(fig_names[i], fontsize=18)
     cbar.ax.tick_params(labelsize=14)
@@ -425,35 +446,31 @@ for i in range(len(model_batch)):
     cb = ax1[i][1].scatter(X_regular_grid, Y_regular_grid, c=data_batch[i],
                     s = 22, cmap=color_maps[i], marker = 's', norm = 'log' if i == 0 else None,
                     vmin = vmin_ls[i], vmax = vmax_ls[i], rasterized = True)
-    ax1[i][1].set_title(f'Data', fontsize=15)
+    ax1[i][1].set_title('Data' if i==0 else '', fontsize=18)
     ax1[i][1].set_xlabel('X [kpc]', fontsize=12)
     ax1[i][1].set_ylabel('Y [kpc]', fontsize=12)
-    ax1[i][1].set_xlim(-10, 10)
-    ax1[i][1].set_ylim(-3, 3)
+    ax1[i][1].set_xlim(X_minmax)
+    ax1[i][1].set_ylim(Y_minmax)
     cbar = fig1.colorbar(cb, ax=ax1[i][1])
     cbar.set_label(fig_names[i], fontsize=18)
     cbar.ax.tick_params(labelsize=14)
 
-    res = (data_batch[i] - model_batch[i]) / data_batch[i] if i == 0 else (data_batch[i] - model_batch[i])
+    # res = (data_batch[i] - model_batch[i]) / data_batch[i] if i == 0 else (data_batch[i] - model_batch[i])
+    res = (np.log10(data_batch[i]) - np.log10(model_batch[i])) if i == 0 else (data_batch[i] - model_batch[i])
     cb = ax1[i][2].scatter(X_regular_grid, Y_regular_grid, c=res,
                     s = 22, cmap='coolwarm', marker = 's', vmin = -vminmax_ls[i], vmax = vminmax_ls[i], rasterized = True)
-    ax1[i][2].set_title('Residuals (Data - Model) / Data' if i == 0 else 'Residuals (Data - Model)', fontsize=15)
+    ax1[i][2].set_title('Residuals' if i == 0 else '', fontsize=18)
     ax1[i][2].set_xlabel('X [kpc]', fontsize=12)
     ax1[i][2].set_ylabel('Y [kpc]', fontsize=12)
-    ax1[i][2].set_xlim(-10, 10)
-    ax1[i][2].set_ylim(-3, 3)
+    ax1[i][2].set_xlim(X_minmax)
+    ax1[i][2].set_ylim(Y_minmax)
     cbar = fig1.colorbar(cb, ax=ax1[i][2])
-    cbar.set_label('Residuals', fontsize=18)
+    cbar.set_label('Data - Model', fontsize=15)
     cbar.ax.tick_params(labelsize=14)
 
     for j in range (0,3):
-        ax1[i][j].contour(xmid, ymid, np.log10(H).T, levels=[2., 2.5, 3., 3.5, 4.], colors='white' if j!=2 else 'grey', linewidths=1)
+        ax1[i][j].contour(xmid, ymid, np.log10(H).T, levels=[2.2, 2.8, 3.1, 3.5, 4.], colors='white' if j!=2 else 'grey', linewidths=1)
 
 fig1.savefig(figname, bbox_inches='tight', dpi=300)
-plt.close()
+# plt.close()
 
-# fig, ax = plt.subplots(1,1, figsize=(8,4))
-# ax.hist(jnp.log(weights), range = [-10, 5], bins=30, alpha=0.7, color='blue', edgecolor='black')
-# ax.set_xlabel('log(Orbital Weights)', fontsize=12)
-# ax.set_ylabel('Number of Orbits', fontsize=12)
-# plt.show()
