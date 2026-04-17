@@ -74,31 +74,28 @@ def hist_mean_std(vlos_edges, hist):
     std = np.sqrt(np.sum((v_mid - mean)**2 * hist * dv) / norm)
     return mean, std
 
+def weighted_kde(vlos, weight, v_eval, bw_method='scott'):
+    """Compute weighted KDE from raw samples and evaluate on v_eval grid."""
+    w = weight / weight.sum()
+    kde = sp.stats.gaussian_kde(vlos, bw_method=bw_method, weights=w)
+    return kde(v_eval)
+
+def select_in_box(X, Y, vlos, weight, X_edges, Y_edges):
+    """Select particles within a spatial box, return vlos and weights."""
+    mask = (X > X_edges[0]) & (X < X_edges[-1]) & (Y > Y_edges[0]) & (Y < Y_edges[-1])
+    return vlos[mask], weight[mask]
+
 def vlos_distribution(X, Y, vlos, weight, vlos_edges, X_edges, Y_edges):
-    """
-    Compute weighted mean radial velocity on a 2D (x, y) grid.
-    v_R = (x * vx + y * vy) / R
-    """
-    
-    mask = (X>X_edges[0]) & (X<X_edges[-1]) & (Y>Y_edges[0]) & (Y<Y_edges[-1])
-    vlos = vlos[mask]
-    weight = weight[mask]
+    """Compute normalized histogram of vlos in a spatial box."""
+    v, w = select_in_box(X, Y, vlos, weight, X_edges, Y_edges)
+    sum_wvlos, _ = np.histogram(v, bins=vlos_edges, weights=w)
+    sum_w = np.sum(w)
+    return sum_wvlos / sum_w
 
-    sum_wvlos, _ = np.histogram(vlos, bins=vlos_edges, weights=weight)
-    sum_w = np.sum(weight)
-
-    vlos_norm = sum_wvlos / sum_w
-
-    return vlos_norm
-
-def vlos_distribution_from_orb(lib, vlos_edges, X_edges, Y_edges):
-    """
-    Compute weighted mean radial velocity on a 2D (x, y) grid.
-    v_R = (x * vx + y * vy) / R
-    """
-    
+def get_orb_samples(lib, X_edges, Y_edges):
+    """Get vlos samples and weights from orbital library within a spatial box."""
     w_model = lib['weights']
-    x_model = np.array(lib['x_orb'])  # list of (n_time, 3) arrays
+    x_model = np.array(lib['x_orb'])
     y_model = np.array(lib['y_orb'])
     z_model = np.array(lib['z_orb'])
     vx_model = np.array(lib['vx_orb'])
@@ -108,8 +105,7 @@ def vlos_distribution_from_orb(lib, vlos_edges, X_edges, Y_edges):
     vy_model = vy_model * KPCGYR_TO_KMS
     vz_model = vz_model * KPCGYR_TO_KMS
 
-    w_model = np.repeat(w_model, x_model.shape[1])  # repeat weights for each time step
-    w_unity = np.ones_like(vx_model.flatten())  # uniform weights for plotting
+    w_model = np.repeat(w_model, x_model.shape[1])
 
     x_model = x_model.flatten()
     y_model = y_model.flatten()
@@ -122,20 +118,12 @@ def vlos_distribution_from_orb(lib, vlos_edges, X_edges, Y_edges):
     vel_model = np.array([vx_model, vy_model, vz_model]).T
     pos_model = (rot_mat @ pos_model.T).T
     vel_model = (rot_mat @ vel_model.T).T
-    x_model, y_model, z_model = pos_model.T
-    vx_model, vy_model, vz_model = vel_model.T
-    posvel_model = np.array([x_model, y_model, z_model, vx_model, vy_model, vz_model]).T
-    vlos_model = vlos_distribution(
-        posvel_model[:, 0], posvel_model[:, 2],
-        posvel_model[:, 4],  w_model, 
-        vlos_edges, X_edges, Y_edges)
-    
-    vlos_unity = vlos_distribution(
-        posvel_model[:, 0], posvel_model[:, 2],
-        posvel_model[:, 4],  w_unity, 
-        vlos_edges, X_edges, Y_edges)
+    x_rot, _, z_rot = pos_model.T
+    _, vy_rot, _ = vel_model.T
 
-    return vlos_model, vlos_unity
+    # Select particles in spatial box (X=x_rot, Y=z_rot, vlos=vy_rot)
+    vlos_sel, w_sel = select_in_box(x_rot, z_rot, vy_rot, w_model, X_edges, Y_edges)
+    return vlos_sel, w_sel
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -261,43 +249,57 @@ if __name__ == '__main__':
             parts.append(TextArea(f'{v:.0f}', textprops=dict(fontsize=fs, color=colors[i])))#, fontweight='bold'
             if i < len(vals) - 1:
                 parts.append(TextArea(', ', textprops=dict(fontsize=fs)))
-        parts.append(TextArea(')', textprops=dict(fontsize=fs)))
+        parts.append(TextArea(') km/s', textprops=dict(fontsize=fs)))
         box = HPacker(children=parts, pad=0, sep=0, align='baseline')
         ab = AnchoredOffsetbox(loc='upper left', child=box, frameon=False,
                                bbox_to_anchor=(0.02, y_anchor), bbox_transform=target_ax.transAxes)
         target_ax.add_artist(ab)
 
-    def plot_vlos_panel(panel_ax, X_edges, Y_edges, vlos_edges, rect_color):
-        """Plot vlos distribution for one spatial box on a given axis."""
+    def plot_vlos_panel(panel_ax, X_edges, Y_edges, vlos_range, rect_color):
+        """Plot weighted KDE of vlos for one spatial box on a given axis."""
+        v_eval = np.linspace(vlos_range[0], vlos_range[1], 200)
+
+        # N-body KDE
         z_cut = np.abs(w0_data[mask_disc, 2]) < 5.0
         posvel_disc = w0_data[mask_disc][z_cut]
         m_disc = mass_data[mask_disc][z_cut]
-        vlos_nbody = vlos_distribution(
-            posvel_disc[:, 0], posvel_disc[:, 2],
-            posvel_disc[:, 4], m_disc,
-            vlos_edges, X_edges, Y_edges)
+        vlos_nb, w_nb = select_in_box(posvel_disc[:, 0], posvel_disc[:, 2],
+                                       posvel_disc[:, 4], m_disc, X_edges, Y_edges)
+        kde_nb = weighted_kde(vlos_nb, w_nb, v_eval)
+        panel_ax.fill_between(v_eval, 0, kde_nb, label='N-body', alpha=0.3, color='C0')
+        panel_ax.plot(v_eval, kde_nb, color='C0', lw=1)
+        mu_nb = np.average(vlos_nb, weights=w_nb)
+        sig_nb = np.sqrt(np.average((vlos_nb - mu_nb)**2, weights=w_nb))
 
-        panel_ax.fill_between(vlos_edges[:-1], 0, vlos_nbody, label='N-body', alpha=0.4, step='mid')
+        # Best-fit model KDE
+        vlos_bf, w_bf = get_orb_samples(lib, X_edges, Y_edges)
+        kde_bf = weighted_kde(vlos_bf, w_bf, v_eval)
+        panel_ax.plot(v_eval, kde_bf, label='Model (best fit)', color='black', lw=3)
+        mu_bf = np.average(vlos_bf, weights=w_bf)
+        sig_bf = np.sqrt(np.average((vlos_bf - mu_bf)**2, weights=w_bf))
 
-        vlos_model, vlos_unity = vlos_distribution_from_orb(lib, vlos_edges, X_edges, Y_edges)
-        panel_ax.plot(vlos_edges[:-1], vlos_model, label='Model (best fit)', drawstyle='steps-mid', color='black', lw=3)
-        # panel_ax.plot(vlos_edges[:-1], vlos_unity, label='Model (uniform weights)', drawstyle='steps-mid', color='grey')
+        # Omega=10 model KDE
+        vlos_o10, w_o10 = get_orb_samples(lib_10, X_edges, Y_edges)
+        kde_10 = weighted_kde(vlos_o10, w_o10, v_eval)
+        panel_ax.plot(v_eval, kde_10, label='Model (Omega=10)', color='orange', lw=1.5)
+        mu_10 = np.average(vlos_o10, weights=w_o10)
+        sig_10 = np.sqrt(np.average((vlos_o10 - mu_10)**2, weights=w_o10))
 
-        vlos_10, _ = vlos_distribution_from_orb(lib_10, vlos_edges, X_edges, Y_edges)
-        panel_ax.plot(vlos_edges[:-1], vlos_10, label='Model (Omega=10)', drawstyle='steps-mid', color='orange', lw=1.5)
+        # Omega=40 model KDE
+        vlos_o40, w_o40 = get_orb_samples(lib_40, X_edges, Y_edges)
+        kde_40 = weighted_kde(vlos_o40, w_o40, v_eval)
+        panel_ax.plot(v_eval, kde_40, label='Model (Omega=40)', color='purple', lw=1.5)
+        mu_40 = np.average(vlos_o40, weights=w_o40)
+        sig_40 = np.sqrt(np.average((vlos_o40 - mu_40)**2, weights=w_o40))
 
-        vlos_40, _ = vlos_distribution_from_orb(lib_40, vlos_edges, X_edges, Y_edges)
-        panel_ax.plot(vlos_edges[:-1], vlos_40, label='Model (Omega=40)', drawstyle='steps-mid', color='purple', lw=1.5)
+        ymax = max(kde_nb.max(), kde_bf.max(), kde_10.max(), kde_40.max()) * 1.3
 
         panel_ax.set_xlabel(r'$v_{\rm los}$ [km/s]')
         panel_ax.set_ylabel(r'Weighted counts')
-        panel_ax.set_ylim(0, 0.065)
+        panel_ax.set_xlim(vlos_range)
+        panel_ax.set_ylim(0, ymax)
 
         # Annotate mean and std
-        mu_nb, sig_nb = hist_mean_std(vlos_edges, vlos_nbody)
-        mu_bf, sig_bf = hist_mean_std(vlos_edges, vlos_model)
-        mu_10, sig_10 = hist_mean_std(vlos_edges, vlos_10)
-        mu_40, sig_40 = hist_mean_std(vlos_edges, vlos_40)
         _colored_stat_line(panel_ax, 1.03, r'$\langle v \rangle$', [mu_nb, mu_bf, mu_10, mu_40], colors)
         _colored_stat_line(panel_ax, 0.95, r'$\sigma_{v}$', [sig_nb, sig_bf, sig_10, sig_40], colors)
 
@@ -312,13 +314,13 @@ if __name__ == '__main__':
     # Red and blue box centers: (-3.0, 1.0) and (-1.8, 0.6)
     # Direction vector: (1.2, -0.4) per step
     # Box 0 (green):  center (-4.2, 1.4) — one step left of red
-    plot_vlos_panel(ax[0], [-4.7, -3.7], [0.9, 1.9], np.linspace(-100, 300, 51), 'darkorange')
+    plot_vlos_panel(ax[0], [-4.7, -3.7], [0.9, 1.9], [-100, 300], 'darkorange')
     # Box 1 (red):    center (-3.0, 1.0)
-    plot_vlos_panel(ax[1], [-3.5, -2.5], [0.5, 1.5], np.linspace(-100, 300, 51), 'red')
+    plot_vlos_panel(ax[1], [-3.5, -2.5], [0.5, 1.5], [-100, 300], 'red')
     # Box 3 (blue):   center (-1.8, 0.6)
-    plot_vlos_panel(ax[3], [-2.3, -1.3], [0.1, 1.1], np.linspace(-200, 350, 51), 'blue')
-    # Box 4 (darkorange): center (-0.6, 0.2) — one step right of blue
-    plot_vlos_panel(ax[4], [-1.1, -0.1], [-0.3, 0.7], np.linspace(-300, 350, 51), 'green')
+    plot_vlos_panel(ax[3], [-2.3, -1.3], [0.1, 1.1], [-200, 350], 'blue')
+    # Box 4 (green): center (-0.6, 0.2) — one step right of blue
+    plot_vlos_panel(ax[4], [-1.1, -0.1], [-0.3, 0.7], [-300, 350], 'green')
 
     # Hide y-axis on all vlos panels and center map
     for i in [0, 1, 3, 4]:
@@ -333,10 +335,10 @@ if __name__ == '__main__':
     from matplotlib.patches import Patch
     from matplotlib.lines import Line2D
     legend_elements = [
-        Patch(facecolor='C0', alpha=0.4, label='N-body'),
-        Line2D([0], [0], color='black', lw=3, label='Model (best fit)'),
-        Line2D([0], [0], color='orange', lw=2, label=r'Model ($\Omega$=10)'),
-        Line2D([0], [0], color='purple', lw=2, label=r'Model ($\Omega$=40)'),
+        Patch(facecolor='C0', alpha=0.3, edgecolor='C0', label='Mock obs (N-body)'),
+        Line2D([0], [0], color='black', lw=3, label='Model (best-fit)'),
+        Line2D([0], [0], color='orange', lw=2, label=r'Model ($\Omega$ = 10 km/s/kpc)'),
+        Line2D([0], [0], color='purple', lw=2, label=r'Model ($\Omega$ = 40 km/s/kpc)'),
     ]
     fig.legend(handles=legend_elements, loc='lower center', ncol=4,
                frameon=False, fontsize=18, bbox_to_anchor=(0.5, 0.88))

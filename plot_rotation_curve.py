@@ -311,16 +311,17 @@ if __name__ == '__main__':
         Vc_model.append(_Vc)
     
     Vc_model = np.array(Vc_model)
-    Vc_model_16, Vc_model_50, Vc_model_84 = np.percentile(Vc_model, [16, 50, 84], axis=0)
+    Vc_model_16, Vc_model_50, Vc_model_84 = np.percentile(Vc_model, [5, 50, 95], axis=0)
     plt.fill_between(r_plot, Vc_model_16, Vc_model_84, color='tomato', alpha=0.2, label=r'$1\sigma$ interval')
-    plt.plot(r_plot, Vc_model_50, lw = 3, ls = '--', alpha = 0.7, label='Best-fit model', color = 'tomato')
+    plt.plot(r_plot, Vc_model_50, lw = 2, ls = '--', alpha = 0.7, label='Best-fit model', color = 'tomato')
     
 
-    plt.xlim(0., 10)
+    plt.xlim(0., 20.)
+    plt.axvline(10., color='grey', ls='--', lw=1, alpha=0.7, label = 'Data extent')
     plt.ylim(50, None)
     plt.xlabel('Galactocentric Radius, R [kpc]')
     plt.ylabel('Circular Velocity, $V_c$ [km/s]')
-    plt.legend(frameon=False)
+    plt.legend(frameon=False, fontsize=10, loc='lower right')
     plt.tight_layout()
     plt.savefig(figname, dpi=300)
     plt.show()

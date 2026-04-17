@@ -283,7 +283,7 @@ if __name__ == '__main__':
     w0_data = rotate(w0_data, -bar_angle0)
 
     # ── Compute N-body enclosed masses ──
-    r_plot = np.linspace(0.1, 20, 200)
+    r_plot = np.linspace(0.1, 30, 200)
 
     M_enc_disc_data = nbody_enclosed_mass(w0_data[mask_disc], mass_data[mask_disc], r_plot)
     M_enc_halo_data = nbody_enclosed_mass(w0_data[mask_halo], mass_data[mask_halo], r_plot)
@@ -318,6 +318,7 @@ if __name__ == '__main__':
     fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharey=True)
 
     # Halo
+    xlim = (0.1, 30)
     ax = axes[0]
     ax.plot(r_plot, M_enc_halo_data, lw=3, color='royalblue', label='N-body')
     # ax.fill_between(r_plot, halo_16, halo_84, color='tomato', alpha=0.2, label=r'Model $1\sigma$')
@@ -327,7 +328,8 @@ if __name__ == '__main__':
     ax.set_title('Dark Matter Halo')
     ax.set_xscale('log')
     ax.set_yscale('log')
-    ax.set(xlim = (0.1, 10))
+    ax.set(xlim = xlim)
+    ax.axvline(10., color='grey', ls='--', lw=1, alpha=0.7, label = 'Data extent')
     ax.legend(frameon=False, fontsize=10)
 
     # Disc (baryonic)
@@ -339,8 +341,9 @@ if __name__ == '__main__':
     ax.set_title('Baryonic (Disc + Bar + Bulge)')
     ax.set_xscale('log')
     ax.set_yscale('log')
-    ax.set(xlim = (0.1, 10))
-    ax.legend(frameon=False, fontsize=10)
+    ax.set(xlim = xlim)
+    ax.axvline(10., color='grey', ls='--', lw=1, alpha=0.7)
+    # ax.legend(frameon=False, fontsize=10)
 
     # Total
     ax = axes[2]
@@ -351,8 +354,9 @@ if __name__ == '__main__':
     ax.set_title('Total')
     ax.set_xscale('log')
     ax.set_yscale('log')
-    ax.set(xlim = (0.1, 10))
-    ax.legend(frameon=False, fontsize=10)
+    ax.set(xlim = xlim)
+    ax.axvline(10., color='grey', ls='--', lw=1, alpha=0.7)
+    # ax.legend(frameon=False, fontsize=10)
 
     # fig.suptitle('Enclosed Mass Profile: Model vs N-body', fontsize=14, y=1.02)
     fig.tight_layout()

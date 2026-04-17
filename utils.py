@@ -210,6 +210,75 @@ def get_rotation_curve(R, potential_fn, potential_args=(), z=0.0, dR=1e-3):
     v_c = jnp.sqrt(vc2)
     return jnp.reshape(v_c, R_shape)
 
+def build_Lcirc_of_E(potential_fn, potential_args=(), R_min=1e-2, R_max=1e2, n_grid=2000, dR=1e-3):
+    """
+    Build an interpolation function Lcirc(E) from a gravitational potential.
+
+    For a grid of radii R, computes the energy and angular momentum of circular
+    orbits in the midplane (z=0):
+        Vc(R) = sqrt(R * dPhi/dR)
+        E_circ(R) = Phi(R, 0) + 0.5 * Vc(R)^2
+        L_circ(R) = R * Vc(R)
+
+    Then returns an interpolator that maps any energy E to Lcirc(E).
+
+    Parameters
+    ----------
+    potential_fn : callable
+        Potential function with signature potential_fn(x, y, z, *potential_args) -> Phi.
+        Phi in units of kpc^2 / Gyr^2.
+    potential_args : tuple, optional
+        Extra arguments forwarded to potential_fn.
+    R_min, R_max : float
+        Range of radii for the lookup table (kpc).
+    n_grid : int
+        Number of grid points (log-spaced).
+    dR : float
+        Finite-difference step for dPhi/dR.
+
+    Returns
+    -------
+    Lcirc_interp : callable
+        Function E -> Lcirc(E). Input and output are numpy arrays.
+        E in kpc^2/Gyr^2, Lcirc in kpc^2/Gyr.
+    E_circ_grid : ndarray
+        The energy grid (for reference / plotting).
+    L_circ_grid : ndarray
+        The Lcirc grid (for reference / plotting).
+    """
+    from scipy.interpolate import interp1d
+
+    R_grid = np.logspace(np.log10(R_min), np.log10(R_max), n_grid)
+
+    # Evaluate potential and its radial derivative on the midplane
+    Phi_grid = np.array([float(potential_fn(r, 0.0, 0.0, *potential_args)) for r in R_grid])
+    Phi_plus = np.array([float(potential_fn(r + dR, 0.0, 0.0, *potential_args)) for r in R_grid])
+    Phi_minus = np.array([float(potential_fn(r - dR, 0.0, 0.0, *potential_args)) for r in R_grid])
+    dPhi_dR = (Phi_plus - Phi_minus) / (2.0 * dR)
+
+    Vc2 = np.maximum(R_grid * dPhi_dR, 0.0)
+    Vc = np.sqrt(Vc2)
+
+    E_circ = Phi_grid + 0.5 * Vc2
+    L_circ = R_grid * Vc
+
+    # E_circ should be monotonically increasing with R for bound orbits.
+    # Sort to ensure monotonicity for interpolation.
+    sort_idx = np.argsort(E_circ)
+    E_circ = E_circ[sort_idx]
+    L_circ = L_circ[sort_idx]
+
+    # Remove duplicates
+    mask = np.diff(E_circ, prepend=-np.inf) > 0
+    E_circ = E_circ[mask]
+    L_circ = L_circ[mask]
+
+    Lcirc_interp = interp1d(E_circ, L_circ, kind='cubic',
+                            bounds_error=False, fill_value=(L_circ[0], L_circ[-1]))
+
+    return Lcirc_interp, E_circ, L_circ
+
+
 def halo_mass_from_stellar_mass(M_star,
     N=0.0351, log10_M1=11.59, beta=1.376, gamma=0.608,
     mmin=1e9, mmax=3e16, tol=1e-6, max_iter=200):

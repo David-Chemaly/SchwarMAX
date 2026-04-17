@@ -287,7 +287,7 @@ if __name__ == '__main__':
     CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_0415_beta25_gamma140_D50_gal2.pkl'
     
     DISCARD=300
-    THIN=1
+    THIN=100
     posterior, logprob, step = load_checkpoint(CHECKPOINT_FILE)
     posterior = posterior[:, logprob[-1, :]>np.amax(logprob[-1, :])-100, :]
     posterior = posterior[DISCARD::THIN, :, :]
@@ -354,7 +354,7 @@ if __name__ == '__main__':
         A2_all.append(A2_i)
 
     A2_all = np.array(A2_all)
-    A2_16, A2_50, A2_84 = np.percentile(A2_all, [16, 50, 84], axis=0)
+    A2_16, A2_50, A2_84 = np.percentile(A2_all, [5, 50, 95], axis=0)
     R_mid_model = 0.5 * (A2_R_edges[:-1] + A2_R_edges[1:])
 
     # ── Plot ──
