@@ -485,10 +485,13 @@ if __name__ == '__main__':
     # data_filename = 'mock_Nbody_bar_XY_withRot_gal2_Nbins1000.pkl'
     # data_filename = 'mock_Nbody_bar_XY_withRot_Nbins600_beta25_gamma170.pkl'
 
-    CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_0415_beta25_gamma140_D50_gal2.pkl'
+    # CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_0415_beta25_gamma140_D50_gal2.pkl'
+    # CHECKPOINT_FILE = data_folder+'/mcmc_checkpoint_0415_beta25_gamma140_D50_gal2.pkl'
+    CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_0418_beta25_gamma140_D50_gal2_fixedbarlength.pkl'
     data_filename = 'mock_data/mock_Nbody_bar_XY_withRot_Nbins600_beta25_gamma140_D50_gal2.pkl'
 
-    output_filename = data_folder + '/best_fit_orbital_library.pkl'
+    # output_filename = data_folder + '/best_fit_orbital_library_0415_beta25_gamma140_D50_gal2.pkl'
+    output_filename = data_folder + '/best_fit_orbital_library_0418_beta25_gamma140_D50_gal2_fixedbarlength.pkl'
     DISCARD = 300
     THIN = 1
 

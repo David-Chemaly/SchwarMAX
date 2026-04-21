@@ -369,7 +369,7 @@ if __name__ == '__main__':
                                       weights=mass_data[mask_disc][R_cut])
     H_col = H / np.sum(H, axis = 1)[:, np.newaxis]
     H_col1 = H_col/np.amax(H_col, axis = 1)[:, np.newaxis]
-    ax.pcolormesh(xedges, yedges, H_col1.T, cmap='inferno',)
+    im0 = ax.pcolormesh(xedges, yedges, H_col1.T, cmap='inferno',)
     ax.set_xlabel(r'$\log_{10}(R \, [{\rm kpc}])$')
     ax.set_ylabel(r'Circularity $\lambda = L_z / L_{\rm circ}(E)$')
     ax.set_title('N-body')
@@ -385,7 +385,7 @@ if __name__ == '__main__':
                                       weights=w_model[R_cut_m])
     H_col = H / np.sum(H, axis = 1)[:, np.newaxis]
     H_col2 = H_col/np.amax(H_col, axis = 1)[:, np.newaxis]
-    ax.pcolormesh(xedges, yedges, H_col2.T, cmap='inferno',)
+    im1 = ax.pcolormesh(xedges, yedges, H_col2.T, cmap='inferno',)
     ax.set_xlabel(r'$\log_{10}(R \, [{\rm kpc}])$')
     ax.set_title('Model (best fit)')
     ax.axhline(0, color='white', ls='--', lw=0.5)
@@ -393,14 +393,26 @@ if __name__ == '__main__':
     ax.axhline(-1, color='white', ls=':', lw=0.5)
 
     ax = axes[2]
-    ax.pcolormesh(xedges, yedges, (H_col1 - H_col2).T, cmap='coolwarm',vmin=-0.5, vmax=0.5)
+    im2 = ax.pcolormesh(xedges, yedges, (H_col1 - H_col2).T, cmap='coolwarm',vmin=-0.5, vmax=0.5)
     ax.set_xlabel(r'$\log_{10}(R \, [{\rm kpc}])$')
     ax.set_title('Difference (N-body - Model)')
     ax.axhline(0, color='white', ls='--', lw=0.5)
     ax.axhline(1, color='white', ls=':', lw=0.5)
     ax.axhline(-1, color='white', ls=':', lw=0.5)
 
+    fig.subplots_adjust(bottom=0.25)
 
-    fig.tight_layout()
+    # Colorbars below each panel
+    for ax_i, im_i in zip(axes[:-1], [im0, im1]):
+        pos = ax_i.get_position()
+        cax = fig.add_axes([pos.x0, 0.06, pos.width, 0.03])
+        cbar = fig.colorbar(im_i, cax=cax, orientation='horizontal', label='Column-normalised density')
+        cbar.ax.tick_params(labelsize=10)
+
+    pos = axes[-1].get_position()
+    cax = fig.add_axes([pos.x0, 0.06, pos.width, 0.03])
+    cbar = fig.colorbar(im2, cax=cax, orientation='horizontal', label='Residual')
+    cbar.ax.tick_params(labelsize=10)
+
     fig.savefig(figname, dpi=300, bbox_inches='tight')
     print(f"Saved to {figname}")

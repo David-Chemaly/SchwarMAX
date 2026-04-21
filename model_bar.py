@@ -1819,7 +1819,7 @@ def model_diagnostic(params_halo_pot, params_disk_rho, dict_data, num_Vbin,
                             y_Rzphi, y_xy,
                             y_xy_boot, y_h1_boot, y_h2_boot, y_h3_boot, y_h4_boot,
                             sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-                            lambda_reg=1, maxiter=200,
+                            lambda_reg=1, maxiter=500,
     )  # (N_boot, n_orb)
 
     #===================================== Compute model vectors + logL for each bootstrap ==================================

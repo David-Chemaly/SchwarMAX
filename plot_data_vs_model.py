@@ -157,6 +157,7 @@ DISCARD = 300        # burn-in steps to discard for corner plot
 THIN = 1             # thinning factor for corner plot
 # CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_gal2_0406.pkl'
 CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_0415_beta25_gamma140_D50_gal2.pkl'
+# CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_0418_beta25_gamma140_D50_gal2_fixedbarlength.pkl'
 
 figname = data_folder+'/plots/mock_Nbins600_beta25_gamma140_D50_gal2.png'
 
@@ -195,6 +196,7 @@ ground_truth = [logMhalo_best_fit,
                 beta,
                 gamma,
                 logLM_best_fit,
+                # 0.,
                 logOmega_best_fit,
                 # jnp.log10(15.0).item(),
                 logSigma_amplifier_best_fit
@@ -251,6 +253,8 @@ params_disk_rho = {
     'light_to_mass_ratio': 10 ** ground_truth[10],
     'Omega_bar': 10 ** ground_truth[11],
     'sigma_amplifier': 10 ** ground_truth[12],
+    'sigma_density_model':0.,
+    'sigma_kine_model':0.
 }
 
 print('Pattern speed for this model:', params_disk_rho['Omega_bar'])
@@ -285,6 +289,11 @@ print('Model Done')
 
 print('logL:', logL)
 
+_, logl_marg, _, _, _, _, _, _, _, logl_all, _ = model_bootstrap(params_halo_pot, params_disk_rho, dict_data, dict_data['total_bins'], 
+                                                                 Rzphi_n_tot, Rzphi_n_grid, Rzphi_lim_grid=jnp.array([[Rmin, Rmax],[zmin, zmax],[phimin, phimax]]),
+                                                                xy_lim_grid=xy_lim_grid,
+                                                                xy_n_grid=xy_n_grid)
+print('logL (formal_pipeline):', logl_marg)
 
 mass_unit = 1/((G*u.Msun).to(u.kpc*(u.km/u.s)**2))
 w0_data, mass_data = agama.readSnapshot(data_folder + '/Bar_model_TG21/model/t_t0_4')
@@ -345,6 +354,12 @@ h2_model, y_h2, sig_A2 = h2_set
 h3_model, y_h3, sig_A3 = h3_set
 h4_model, y_h4, sig_A4 = h4_set
 
+Chi2_density = jnp.sum((density_2DXY - y_xy)**2 / sig_xy**2)
+Chi2_h1 = jnp.sum((h1_model - y_h1)**2 / sig_A1**2)
+Chi2_h2 = jnp.sum((h2_model - y_h2)**2 / sig_A2**2)
+Chi2_h3 = jnp.sum((h3_model - y_h3)**2 / sig_A3**2)
+Chi2_h4 = jnp.sum((h4_model - y_h4)**2 / sig_A4**2)
+
 
 index_remap = bin_mapping[:-1]
 
@@ -383,6 +398,7 @@ color_maps = [cmr.sepia, cmr.iceburn,  cmr.amber, cmr.iceburn, cmr.amber]
 vmin_ls = [1e1, -200, 20, -0.2, -0.2]
 vmax_ls = [1e4, 200, 150, 0.2, 0.1]
 vminmax_ls = [0.15, 25, 25, 0.15, 0.15]
+chi2_ls = [Chi2_density, Chi2_h1, Chi2_h2, Chi2_h3, Chi2_h4]
 
 fig1, ax1 = plt.subplots(len(model_batch),3, figsize = (18, 2.5 * len(model_batch)), gridspec_kw={'hspace':0.4, 'wspace':0.3})
 
@@ -464,6 +480,7 @@ for i in range(len(model_batch)):
     ax1[i][2].set_ylabel('Y [kpc]', fontsize=12)
     ax1[i][2].set_xlim(X_minmax)
     ax1[i][2].set_ylim(Y_minmax)
+    ax1[i][2].text(0.05, 0.8, r'$\chi^2 = $'+f'{chi2_ls[i]:.2f}', transform=ax1[i][2].transAxes, fontsize=15)
     cbar = fig1.colorbar(cb, ax=ax1[i][2])
     cbar.set_label('Data - Model', fontsize=15)
     cbar.ax.tick_params(labelsize=14)
