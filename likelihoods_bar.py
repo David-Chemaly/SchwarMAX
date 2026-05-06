@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import jax.numpy.linalg as jnn
 
 from constants import EPSILON
-from model_bar import model, model_marg, model_bootstrap, model_bootstrap_psf, projection, density_func, model_test_convergence
+from model_bar import model, model_marg, model_bootstrap, model_bootstrap_psf, projection, density_func, model_test_convergence, model_jackknife_chi2
 from functools import partial
 
 from utils import *
@@ -574,6 +574,109 @@ def logl_angular_input_bootstrap_psf(params, dict_data, num_Vbin):
     val = jax.lax.cond(logl_density < logl_density_max - 1000, true_func, false_func)
     return val
 
+
+
+@partial(jax.jit, static_argnames=('num_Vbin', 'Rzphi_n_tot', 'n_groups'))
+def jackknife_error_wrapper(params, dict_data, num_Vbin, Rzphi_n_tot, n_groups):
+    """
+    Same as logl_angular_input but uses model_bootstrap() which marginalizes
+    logL over observational noise via bootstrap resampling:
+        - 100 perturbed observation vectors y_i = y + N(0, sig)
+        - Shared Cholesky, vmapped ADMM solves
+        - logL_marg = log(mean(exp(logL_i)))
+    """
+    logM_enc = params[0]
+    log_c = params[3]
+    logM_halo, logRs_halo = logMenc_logc_to_logM_logRs(logM_enc, log_c, r_enc=10.0, Delta=200., rho_crit=277.54)
+
+    # logM_halo = params[0]
+    logM_disc = params[1]
+    logM_bar = params[2]
+    # logRs_halo = params[3]
+    logRs_disk = params[4]
+    logHs_disk = params[5]
+    logL_bar = params[6]
+    alpha = params[7]
+    beta = params[8]
+    gamma = params[9]
+    log_light_to_mass_ratio = params[10]
+    log_Omega_bar = params[11]
+
+    sigma_density_model = 0#10**params[12]
+    sigma_kine_model = 0. 
+    sigma_amplifier = 10**params[12]
+
+    alpha = alpha * 180 / jnp.pi
+    beta = beta * 180 / jnp.pi
+    gamma = gamma * 180 / jnp.pi
+
+    # Derived bar parameters
+    L_bar = 10.0 ** logL_bar
+    a_bar = L_bar / 5.0
+    Hs_disc = 10.0 ** logHs_disk
+    b_bar = Hs_disc
+
+    params_halo_pot = {
+        'logM': logM_halo,
+        'Rs':10 ** logRs_halo,
+        'a':1.0,
+        'b':1.0,
+        'c':1.0,
+        'x_origin':0.0,
+        'y_origin':0.0,
+        'z_origin':0.0,
+        'dirx':0.0,
+        'diry':0.0,
+        'dirz':1.0
+    }
+
+    params_baryon_rho = {
+        'logM_disc': logM_disc,
+        'Rs_disc': 10 ** logRs_disk,
+        'Hs_disc': Hs_disc,
+        'logM_bar': logM_bar,
+        'L_bar': L_bar,
+        'a_bar': a_bar,
+        'b_bar': b_bar,
+        'light_to_mass_ratio': 10 ** log_light_to_mass_ratio,
+        'Omega_bar': 10 ** log_Omega_bar,
+        'x_origin': 0.0,
+        'y_origin': 0.0,
+        'z_origin': 0.0,
+        'dirx': 0.0,
+        'diry': 0.0,
+        'dirz': 1.0,
+        'alpha': alpha,
+        'beta': beta,
+        'gamma': gamma,
+
+        'sigma_density_model': sigma_density_model,
+        'sigma_kine_model': sigma_kine_model,
+        'sigma_amplifier': sigma_amplifier,
+    }
+
+    X_minmax = dict_data['X_minmax']
+    Y_minmax = dict_data['Y_minmax']
+    nX, nY = dict_data['nX_nY']
+    xy_lim_grid = jnp.array([X_minmax, Y_minmax])
+    xy_n_grid = jnp.array([nX, nY])
+
+    Rmin, Rmax = dict_data['R_minmax']
+    zmin, zmax = dict_data['z_minmax']
+    phimin, phimax = dict_data['phi_minmax']
+    # Rzphi_n_tot = dict_data['Rzphi_n_tot']
+    Rzphi_n_grid = dict_data['Rzphi_n_grid']
+
+
+    chi2_full, chi2_all, chi2_mean, chi2_jack_var, chi2_jack_std, w_full, weights_all = \
+        model_jackknife_chi2(params_halo_pot, params_baryon_rho, dict_data, num_Vbin,
+                        Rzphi_n_tot, Rzphi_n_grid, Rzphi_lim_grid=jnp.array([[Rmin, Rmax],[zmin, zmax],[phimin, phimax]]),
+                        xy_lim_grid=xy_lim_grid,
+                        xy_n_grid=xy_n_grid,
+                        n_groups = n_groups, batch_size=10,)
+
+
+    return chi2_full, chi2_all, chi2_mean, chi2_jack_var, chi2_jack_std, w_full, weights_all
 
 @partial(jax.jit, static_argnames=('num_Vbin'))
 def logl_angular_input_bootstrap_with_maps(params, dict_data, num_Vbin):

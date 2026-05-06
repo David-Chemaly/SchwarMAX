@@ -147,19 +147,20 @@ data_folder = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data'
 path = '/Users/hanyuan/Dropbox/python_script/SchwarMAX/'
 # data_filename = 'mock_Nbody_bar_XY_withRot_gal2_Nbins1000.pkl'
 data_filename = 'mock_data/mock_Nbody_bar_XY_withRot_Nbins600_beta25_gamma140_D50_gal2.pkl'
-dict_data = get_dict_data_bootstrap(path, data_filename, n_samples = int(7.5e3))
+dict_data = get_dict_data_bootstrap(path, data_filename, n_samples = int(1e4))
 
 with open(path + data_filename, 'rb') as f:
     bin_dict = pickle.load(f)
 
 
-DISCARD = 300        # burn-in steps to discard for corner plot
+DISCARD = 600        # burn-in steps to discard for corner plot
 THIN = 1             # thinning factor for corner plot
-# CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_gal2_0406.pkl'
+
 CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_0415_beta25_gamma140_D50_gal2.pkl'
 # CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_0418_beta25_gamma140_D50_gal2_fixedbarlength.pkl'
 
-figname = data_folder+'/plots/mock_Nbins600_beta25_gamma140_D50_gal2.png'
+figname = data_folder+'/plots/mock_Nbins600_beta25_gamma140_D50_gal2_Omega35.png'
+# figname = data_folder+'/plots/mock_Nbins600_beta25_gamma140_D50_gal2_fixedbarlength.png'
 
 param_names = ['logM_halo', 'logM_disk', 'logM_bar', 'logRs_halo', 'logRs_disk', 'logHs_disk', 'logRs_bar', 
                r'$\alpha$', r'$\beta$', r'$\gamma$', 
@@ -192,13 +193,14 @@ ground_truth = [logMhalo_best_fit,
                 logRs_disk_best_fit,
                 logHs_disk_best_fit,
                 logRs_bar_best_fit,   
+                # 0.68,
                 alpha,
                 beta,
                 gamma,
                 logLM_best_fit,
                 # 0.,
-                logOmega_best_fit,
-                # jnp.log10(15.0).item(),
+                # logOmega_best_fit,
+                jnp.log10(35.0).item(),
                 logSigma_amplifier_best_fit
 ]
 # ground_truth = [

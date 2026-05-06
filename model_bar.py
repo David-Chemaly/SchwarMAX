@@ -1355,6 +1355,284 @@ def model_bootstrap(params_halo_pot, params_disk_rho, dict_data, num_Vbin,
 
 
 
+@partial(jax.jit, static_argnames=('num_Vbin', 'n_groups', 'batch_size', 'Rzphi_n_tot'))
+def model_jackknife_chi2(params_halo_pot, params_disk_rho, dict_data, num_Vbin,
+                         Rzphi_n_tot=360, Rzphi_n_grid=jnp.array([10,6,6]),
+                         Rzphi_lim_grid=jnp.array([[0,10.],[-3,3],[-jnp.pi, jnp.pi]]),
+                         xy_lim_grid=jnp.array([[-10.,10.],[-3.,3.]]),
+                         xy_n_grid=jnp.array([60,40]),
+                         n_groups=100, batch_size=10,):
+    """
+    Delete-d jackknife estimate of the chi^2 statistic.
+
+    Partitions the n_bins Voronoi bins into n_groups disjoint groups (random
+    permutation, seed fixed for reproducibility). For each group g, re-solves
+    NNLS with that group's bins zero-weighted (sigma -> BIG), then evaluates
+    chi^2 on the FULL (unmasked) data using the leave-d-out weights.
+
+    Delete-d variance formula (g disjoint groups of size d = n_bins / n_groups):
+        var_jack = ((n_bins - d) / d) * (1/g) * sum_g (chi2_(g) - chi2_bar)^2
+
+    When n_groups == n_bins (d=1) this reduces to the standard leave-one-out
+    jackknife with prefactor (n-1)/n.
+
+    Returns
+    -------
+    chi2_full      : scalar   full-sample chi^2
+    chi2_all       : (n_groups,)  chi^2 from each leave-d-out replicate
+    chi2_mean      : scalar   mean over replicates
+    chi2_jack_var  : scalar   jackknife variance of chi^2
+    chi2_jack_std  : scalar   jackknife standard error of chi^2
+    weights_all    : (n_groups, n_orb)  leave-d-out NNLS weights
+    """
+
+    w0 = dict_data['w0']
+    n_particles = w0.shape[0]
+    v0 = dict_data['v0']
+    s = dict_data['s']
+    num_per_bin = dict_data['num_per_bin']
+    bin_mapping = dict_data['bin_mapping']
+    Omega_bar = params_disk_rho['Omega_bar']
+    alpha, beta, gamma = params_disk_rho['alpha'], params_disk_rho['beta'], params_disk_rho['gamma']
+    rotation_matrix = makeRotationMatrix(alpha, beta, gamma)
+
+    sigma_density_model = params_disk_rho['sigma_density_model']
+    sigma_kine_model = params_disk_rho['sigma_kine_model']
+
+    # =========================================== BUILD BARYON PARAMS =====================================================
+    M_bar = 10.0 ** params_disk_rho['logM_bar']
+    L_bar = params_disk_rho['L_bar']
+    a_bar = params_disk_rho['a_bar']
+    b_bar = params_disk_rho['b_bar']
+
+    params_baryon = {
+        'logM_disc': params_disk_rho['logM_disc'],
+        'Rs_disc':   params_disk_rho['Rs_disc'],
+        'Hs_disc':   params_disk_rho['Hs_disc'],
+        'x_origin':  params_disk_rho['x_origin'],
+        'y_origin':  params_disk_rho['y_origin'],
+        'z_origin':  params_disk_rho['z_origin'],
+        'dirx':      params_disk_rho['dirx'],
+        'diry':      params_disk_rho['diry'],
+        'dirz':      params_disk_rho['dirz'],
+        'logM_bar':  params_disk_rho['logM_bar'],
+        'L_bar':     L_bar,
+        'a_bar':     a_bar,
+        'b_bar':     b_bar,
+    }
+
+    # =========================================== GET INITIAL VELOCITY ===================================================
+    get_jeans_moments_vmap = jax.vmap(get_jeans_moments, in_axes=(0,0,0,None,None,None,None))
+    def get_w0_new(w0, key1, key2, key3, n_particles):
+        jeans_moments = get_jeans_moments_vmap(w0[:,0], w0[:,1], w0[:,2], params_baryon, params_disk_rho, params_halo_pot, 1.)
+        v_rot, sig_R, sig_z, sig_phi = jeans_moments
+        g1, g2, g3 = jax.random.normal(key1, (n_particles,)), jax.random.normal(key2, (n_particles,)), jax.random.normal(key3, (n_particles,))
+        vR = g1 * sig_R
+        vz = g2 * sig_z
+        vphi = v_rot + g3 * sig_phi
+        x, y, vx, vy = getCartesianFromCylindrical_clockwise(jnp.sqrt(w0[:,0]**2 + w0[:,1]**2), jnp.arctan2(w0[:,1], w0[:,0]), vR, vphi)
+        return jnp.array([x, y, w0[:,2], vx, vy, vz]).T
+    key1, key2, key3 = jax.random.PRNGKey(42), jax.random.PRNGKey(109), jax.random.PRNGKey(2026)
+    w0_new = get_w0_new(w0, key1, key2, key3, n_particles)
+
+    # ======================================== Calculate orbital timescale ================================================
+    _R = jnp.sqrt(w0_new[:,0]**2 + w0_new[:,1]**2)
+    _z = w0_new[:,2]
+    _Vc = jax.vmap(get_rotation_curve, in_axes=(0, None, None, 0))(
+        _R, potential_func, (params_baryon, params_halo_pot), _z
+    )
+
+    n_realizations = 4
+    key = jax.random.PRNGKey(911)
+    keys = jax.random.split(key, 6)
+    d_scale = 0.1 * jnp.ones(_R.shape)
+    v_scale = jnp.clip(0.1 * _Vc, a_min=1, a_max=15)
+    noise_x  = (jax.random.uniform(keys[0], (n_particles, n_realizations,)) - 0.5) * d_scale[:, jnp.newaxis]
+    noise_y  = (jax.random.uniform(keys[1], (n_particles, n_realizations,)) - 0.5) * d_scale[:, jnp.newaxis]
+    noise_z  = (jax.random.uniform(keys[2], (n_particles, n_realizations,)) - 0.5) * d_scale[:, jnp.newaxis]
+    noise_vx = (jax.random.uniform(keys[3], (n_particles, n_realizations,)) - 0.5) * v_scale[:, jnp.newaxis]
+    noise_vy = (jax.random.uniform(keys[4], (n_particles, n_realizations,)) - 0.5) * v_scale[:, jnp.newaxis]
+    noise_vz = (jax.random.uniform(keys[5], (n_particles, n_realizations,)) - 0.5) * v_scale[:, jnp.newaxis]
+
+    w0_new_batch = w0_new[:, jnp.newaxis, :]
+    w0_new_batch = w0_new_batch + jnp.stack([noise_x, noise_y, noise_z, noise_vx, noise_vy, noise_vz], axis=-1)
+    T_orb = jax.vmap(estimate_orbital_timescale, in_axes=(0, None, None, 0))(
+        _R, potential_func, (params_baryon, params_halo_pot), _z
+    )
+    T_orb_batch = T_orb[:, jnp.newaxis].repeat(n_realizations, axis=1)
+
+    # =========================================== Integrate orbits =======================================================
+    @jax.jit
+    def acc_fn(x, y, z):
+        def _pot(pos):
+            return potential_func(pos[0], pos[1], pos[2], params_baryon, params_halo_pot)
+        return -jax.grad(_pot)(jnp.array([x, y, z]))
+
+    @jax.jit
+    def pot_fn(x, y, z):
+        return potential_func(x, y, z, params_baryon, params_halo_pot)
+
+    N_step_per_orb = 100
+    N_dynamical_time = 50
+    N_max = N_step_per_orb * N_dynamical_time
+    T_total_batch = T_orb_batch * N_dynamical_time
+    dt_init_batch = T_orb_batch / N_step_per_orb
+    atol, rtol = 1e-7, 1e-4
+    dt_min, dt_max = 1e-5, 0.3
+
+    Rzphi_bin_counts, surface_density, h1, h2, h3, h4, _ = _integrate_adaptive_batch_chunked_vmap(
+                        w0_new_batch, acc_fn, pot_fn, N_max, T_total_batch,
+                        dt_init_batch, -Omega_bar,
+                        atol, rtol,
+                        dt_min, dt_max,
+                        num_Vbin, bin_mapping, num_per_bin,
+                        Rzphi_lim_grid, xy_lim_grid,
+                        Rzphi_n_grid, xy_n_grid, Rzphi_n_tot,
+                        v0, s, rotation_matrix,
+                        100)
+    A_Rzphi = Rzphi_bin_counts.T
+    A_xy    = surface_density.T
+    A_h1    = h1.T
+    A_h2    = h2.T
+    A_h3    = h3.T
+    A_h4    = h4.T
+
+    # ================================== Preprocess the obtained matrices ============================================
+    @jax.jit
+    def density_func_Rz(R, z, phi, params):
+        x = R * jnp.cos(phi)
+        y = R * jnp.sin(phi)
+        return density_func(x, y, z, params)
+
+    @partial(jax.jit, static_argnames=['rho_fct'])
+    def get_mass(R_grid, z_grid, phi_grid, rho_fct, dict_params, dR, dz, dphi, sample):
+        R_samples   = R_grid   + (sample[:,0] - 0.5) * dR
+        z_samples   = z_grid   + (sample[:,1] - 0.5) * dz
+        phi_samples = phi_grid + (sample[:,2] - 0.5) * dphi
+        density_samples = rho_fct(R_samples, z_samples, phi_samples, dict_params)
+        mass_tot = jnp.sum(density_samples * R_samples) / sample.shape[0]
+        return mass_tot * dR * dz * dphi
+
+    R_grid, dR = dict_data['R_grid'], dict_data['dR']
+    z_grid, dz = dict_data['z_grid'], dict_data['dz']
+    phi_grid, dphi = dict_data['phi_grid'], dict_data['dphi']
+    y_Rzphi = jax.vmap(get_mass, in_axes=[0, 0, 0, None, None, None, None, None, None])(
+                R_grid, z_grid, phi_grid, density_func_Rz, params_disk_rho, dR, dz, dphi, dict_data['sample_for_integration']
+    )
+
+    y_xy = dict_data['XY_density_data'].astype(jnp.float32) / params_disk_rho['light_to_mass_ratio']
+    y_h1 = dict_data['h1_data']
+    y_h2 = dict_data['h2_data']
+    y_h3 = dict_data['h3_data']
+    y_h4 = dict_data['h4_data']
+
+    sig_Rzphi = 0.02 * y_Rzphi + 1e-10
+    sig_xy = (dict_data['XY_density_data_err'] + EPSILON) / params_disk_rho['light_to_mass_ratio']
+    sig_A1 = dict_data['h1_data_err'] + EPSILON
+    sig_A2 = dict_data['h2_data_err'] + EPSILON
+    sig_A3 = dict_data['h3_data_err'] + EPSILON
+    sig_A4 = dict_data['h4_data_err'] + EPSILON
+
+    sig_xy = jnp.sqrt(sig_xy**2 + (sigma_density_model * y_xy)**2)
+    sig_A1 = jnp.sqrt(sig_A1**2 + (sigma_kine_model)**2)
+    sig_A2 = jnp.sqrt(sig_A2**2 + (sigma_kine_model)**2)
+    sig_A3 = jnp.sqrt(sig_A3**2 + (sigma_kine_model)**2)
+    sig_A4 = jnp.sqrt(sig_A4**2 + (sigma_kine_model)**2)
+
+    mean_mass_per_orb = jnp.sum(y_Rzphi) / A_Rzphi.shape[1]
+    y_xy       = y_xy       / mean_mass_per_orb
+    sig_xy     = sig_xy     / mean_mass_per_orb
+    y_Rzphi    = y_Rzphi    / mean_mass_per_orb
+    sig_Rzphi  = sig_Rzphi  / mean_mass_per_orb
+
+    # =========================================== Build jackknife groups =====================================================
+    # Random disjoint partition of XY/kinematic bins into n_groups groups of size d = n_bins // n_groups.
+    # For spatial-block partitioning, replace `group_of_bin` below with your own grouping
+    # (e.g., from k-means on bin centroids).
+    n_bins = A_xy.shape[0]
+    d      = n_bins // n_groups
+    perm   = jax.random.permutation(jax.random.PRNGKey(12345), n_bins)
+    group_of_bin = perm % n_groups                                       # (n_bins,)
+    masks = (group_of_bin[None, :] != jnp.arange(n_groups)[:, None]).astype(jnp.float32)
+    # masks[g, i] == 1 if bin i is KEPT in replicate g, 0 if dropped.
+
+    # =========================================== Chi^2 helper =============================================================
+    def _chi2_from_weights(w, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4):
+        """chi^2 on the FULL (unmasked) data using orbital weights w."""
+        eps = 1e-8
+        y_xy_safe = jnp.where(jnp.abs(y_xy) > eps, y_xy, 1.0)
+
+        m_Rzphi = A_Rzphi @ w
+        m_xy    = A_xy    @ w
+        m_h1 = ((A_h1 * A_xy) @ w) / y_xy_safe
+        m_h2 = ((A_h2 * A_xy) @ w) / y_xy_safe
+        m_h3 = ((A_h3 * A_xy) @ w) / y_xy_safe
+        m_h4 = ((A_h4 * A_xy) @ w) / y_xy_safe
+
+        clip_val = 10.0
+        m_h1 = jnp.clip(m_h1, -clip_val, clip_val)
+        m_h2 = jnp.clip(m_h2, -clip_val, clip_val)
+        m_h3 = jnp.clip(m_h3, -clip_val, clip_val)
+        m_h4 = jnp.clip(m_h4, -clip_val, clip_val)
+
+        r_xy    = ((m_xy    - y_xy)    / (sig_xy    + EPSILON))**2
+        r_h1 = jnp.where(m_h1 < 9.9, ((m_h1 - y_h1) / (sig_A1 + EPSILON))**2, 0.0)
+        r_h2 = jnp.where(m_h2 < 9.9, ((m_h2 - y_h2) / (sig_A2 + EPSILON))**2, 0.0)
+        r_h3 = jnp.where(m_h3 < 9.9, ((m_h3 - y_h3) / (sig_A3 + EPSILON))**2, 0.0)
+        r_h4 = jnp.where(m_h4 < 9.9, ((m_h4 - y_h4) / (sig_A4 + EPSILON))**2, 0.0)
+
+        return (jnp.nansum(r_xy) +
+                jnp.nansum(r_h1) + jnp.nansum(r_h2) +
+                jnp.nansum(r_h3) + jnp.nansum(r_h4))
+
+    # =========================================== Full-sample fit (reference) =============================================
+    w_full = solve_nnls_admm(
+        A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+        y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+        sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
+        lambda_reg=1, maxiter=200,
+    )
+    # chi^2 of the full (unmasked) fit — should match model_bootstrap's chi^2
+    # (first bootstrap, unamplified sigma) to within solver tolerance.
+    chi2_full = _chi2_from_weights(w_full, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4)
+
+    # =========================================== Leave-d-out fits (vmapped) ==============================================
+    BIG = 1e20  # inflated sigma acts as a zero-weight mask in the solver
+
+    def solve_one(mask_g):
+        sxy_m = jnp.where(mask_g > 0, sig_xy, BIG)
+        s1_m  = jnp.where(mask_g > 0, sig_A1, BIG)
+        s2_m  = jnp.where(mask_g > 0, sig_A2, BIG)
+        s3_m  = jnp.where(mask_g > 0, sig_A3, BIG)
+        s4_m  = jnp.where(mask_g > 0, sig_A4, BIG)
+        w = solve_nnls_admm(
+            A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
+            y_Rzphi, y_xy, y_h1, y_h2, y_h3, y_h4,
+            sig_Rzphi, sxy_m, s1_m, s2_m, s3_m, s4_m,
+            lambda_reg=1, maxiter=200,
+        )
+        return w, _chi2_from_weights(w, sxy_m, s1_m, s2_m, s3_m, s4_m)
+
+    # Batched parallel solve: vmap within a batch, lax.map across batches.
+    # Requires n_groups % batch_size == 0 (pad n_groups if needed).
+    n_batches = n_groups // batch_size
+    masks_batched = masks.reshape(n_batches, batch_size, n_bins)
+
+    def _batch_solve(masks_batch):
+        return jax.vmap(solve_one)(masks_batch)
+
+    weights_batched, chi2_batched = jax.lax.map(_batch_solve, masks_batched)
+    weights_all = weights_batched.reshape(n_groups, -1)   # (n_groups, n_orb)
+    chi2_all    = chi2_batched.reshape(n_groups)           # (n_groups,)
+
+    # =========================================== Delete-d jackknife variance =============================================
+    chi2_mean     = jnp.mean(chi2_all)
+    chi2_jack_var = ((n_bins - d) / d) * jnp.mean((chi2_all - chi2_mean)**2)
+    chi2_jack_std = jnp.sqrt(chi2_jack_var)
+
+    return chi2_full, chi2_all, chi2_mean, chi2_jack_var, chi2_jack_std, w_full, weights_all
+
+
 @partial(jax.jit, static_argnames=('num_Vbin'))
 def model_bootstrap_psf(params_halo_pot, params_disk_rho, dict_data, num_Vbin):
     """
@@ -1853,6 +2131,7 @@ def model_diagnostic(params_halo_pot, params_disk_rho, dict_data, num_Vbin,
         'h2_all': np.array(h2_all).astype(np.float32),
         'h3_all': np.array(h3_all).astype(np.float32),
         'h4_all': np.array(h4_all).astype(np.float32),
+        'mass_per_orbit': float(mean_mass_per_orb),
     }
 
 @partial(jax.jit, static_argnames=('num_Vbin'))
@@ -2802,7 +3081,7 @@ def model_for_plotting(params_halo_pot, params_disk_rho, dict_data, num_Vbin,
         phi_samples = phi_grid + (sample[:,2] - 0.5) * dphi
         density_samples = rho_fct(R_samples, z_samples, phi_samples, dict_params)
         mass_tot = jnp.sum(density_samples * R_samples) / sample.shape[0]
-        return mass_tot
+        return mass_tot * dR * dz * dphi
 
     R_grid, dR = dict_data['R_grid'], dict_data['dR']
     z_grid, dz = dict_data['z_grid'], dict_data['dz']

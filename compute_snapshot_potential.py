@@ -30,7 +30,7 @@ from CylindricalSpline_particles import get_phi_m_from_agama
 # Config
 # ---------------------------------------------------------------------------
 snapshot_path = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data/Bar_model_TG21/model/t_t0_7'
-output_path = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data/Bar_model_TG21/dict_phi_stellar_t_t0_7.pkl'
+output_path = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data/Bar_model_TG21/dict_phi_stellar_t_t0_7_axi.pkl'
 
 # Grid parameters
 NR, NZ = 50, 30
@@ -86,6 +86,32 @@ w0_data, mass_raw = agama.readSnapshot(snapshot_path)
 mass_data = mass_raw * mass_unit  # Convert to Msun
 print(f"  Loaded {len(mass_data)} particles in {time.time() - t0:.2f} s")
 
+# # Center on COM (inner R < 5 kpc)
+# R = np.sqrt(w0_data[:, 0]**2 + w0_data[:, 1]**2)
+# mask_inner = R < 5
+# for i in range(6):
+#     w0_data[:, i] -= np.sum(w0_data[mask_inner, i] * mass_data[mask_inner]) / np.sum(mass_data[mask_inner])
+
+# # Flip x-axis (convention)
+# w0_data[:, 0] *= -1
+# w0_data[:, 3] *= -1
+
+unique_masses = np.unique(mass_data)
+mask_halo = mass_data == unique_masses[-1]
+mask_disc = ~mask_halo
+
+# Iterative centering on disc particles (shrinking aperture)
+for r_ap in [10.0, 5.0, 3.0, 2.0]:
+    R = np.sqrt(w0_data[:, 0]**2 + w0_data[:, 1]**2)
+    mask_center = mask_disc & (R < r_ap)
+    m_c = mass_data[mask_center]
+    for col in range(6):
+        w0_data[:, col] -= np.sum(w0_data[mask_center, col] * m_c) / np.sum(m_c)
+
+w0_data[:, 0] = -w0_data[:, 0]
+w0_data[:, 3] = -w0_data[:, 3]
+
+
 # Remove DM (heaviest species)
 unique_masses, counts = np.unique(mass_data, return_counts=True)
 print(f"  Particle species: {len(unique_masses)}")
@@ -106,16 +132,6 @@ print("\n" + "=" * 70)
 print("2. CENTERING & ORIENTING BAR")
 print("=" * 70)
 
-# Center on COM (inner R < 5 kpc)
-R = np.sqrt(w0_data[:, 0]**2 + w0_data[:, 1]**2)
-mask_inner = R < 5
-for i in range(6):
-    w0_data[:, i] -= np.sum(w0_data[mask_inner, i] * mass_data[mask_inner]) / np.sum(mass_data[mask_inner])
-
-# Flip x-axis (convention)
-w0_data[:, 0] *= -1
-w0_data[:, 3] *= -1
-
 # Rotate bar to x-axis
 R_mid, bar_angles, bar_strength = bar_angle_bar_strength(w0_data[:, 0], w0_data[:, 1])
 bar_angle0 = np.mean(bar_angles[R_mid < 4])
@@ -124,6 +140,15 @@ print(f"  Bar angle (before rotation): {np.degrees(bar_angle0):.1f} deg")
 
 R_mid2, ba2, bs2 = bar_angle_bar_strength(w0_data[:, 0], w0_data[:, 1])
 print(f"  Bar angle (after rotation):  {np.degrees(np.mean(ba2[R_mid2 < 4])):.1f} deg")
+
+R = np.sqrt(w0_data[:, 0]**2 + w0_data[:, 1]**2)
+phi_random = np.random.uniform(0, 2 * np.pi, len(R))
+x_random = R * np.cos(phi_random)
+y_random = R * np.sin(phi_random)
+
+mask_R6 = R > 6
+w0_data[mask_R6, 0] = x_random[mask_R6]
+w0_data[mask_R6, 1] = y_random[mask_R6]
 
 positions = w0_data[:, :3]
 masses = mass_data

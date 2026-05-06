@@ -107,6 +107,7 @@ if __name__ == '__main__':
 
     data_folder = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data'
     figname = data_folder + '/plots/radial_velocity_field.png'
+    figname_density = data_folder + '/plots/orbit_vs_data_density_field.png'
     # orbital_library_file = data_folder + '/best_fit_orbital_library.pkl'
     # orbital_library_file = data_folder + '/best_fit_orbital_library_0418_beta25_gamma140_D50_gal2_fixedbarlength.pkl'
     orbital_library_file = data_folder + '/best_fit_orbital_library_0415_beta25_gamma140_D50_gal2.pkl'
@@ -170,6 +171,7 @@ if __name__ == '__main__':
     vz_model = np.array(lib['vz_orb'])
     vx_model = vx_model * KPCGYR_TO_KMS
     vy_model = vy_model * KPCGYR_TO_KMS
+    mean_mass_per_orbit = lib['mean_mass_per_orbit']  # convert to mass/time
 
     w_model = np.repeat(w_model, x_model.shape[1])  # repeat weights for each time step
     # w_model = np.ones_like(vx_model)  # uniform weights for plotting
@@ -178,7 +180,7 @@ if __name__ == '__main__':
     y_model = y_model.flatten()
     vx_model = vx_model.flatten()
     vy_model = vy_model.flatten()
-    
+    mass_particle = np.ones_like(w_model) * mean_mass_per_orbit  # assign mass to each particle
 
     vR_model = binned_mean_vR(x_model, y_model, vx_model, vy_model, w_model,
                               x_edges, y_edges)
@@ -212,10 +214,23 @@ if __name__ == '__main__':
     print(f"Saved to {figname}")
 
 
-    fig, ax2 = plt.subplots(figsize=(6, 5))
-    H, xedge, yedge, cb = ax2.hist2d(x_model, y_model, bins=100, range = [[-10,10], [-10,10]], weights=w_model, cmap='viridis', norm = 'log')
+    fig, ax2 = plt.subplots(1, 2, figsize=(12, 3.5))
+    H, xedge, yedge, cb = ax2[0].hist2d(pos_disc[:,0], pos_disc[:,1], bins=100, range = [[-10,10], [-10,10]], 
+                                     weights=m_disc, cmap='viridis', norm = 'log', vmin = 1e6, vmax = 1e9)
     xmid, ymid = 0.5*(xedge[1:]+xedge[:-1]), 0.5*(yedge[1:]+yedge[:-1])
-    ax2.contour(xmid, ymid, np.log10(H).T, levels=10, colors='white', linewidths=0.5)
+    ax2[0].contour(xmid, ymid, np.log10(H).T, levels=10, colors='white', linewidths=0.5)
+    fig.colorbar(cb, ax=ax2[0])
+
+    H, xedge, yedge, cb = ax2[1].hist2d(x_model, y_model, bins=100, range = [[-10,10], [-10,10]], 
+                                     weights=w_model*mass_particle, cmap='viridis', norm = 'log', vmin = 1e6, vmax = 1e9)
+    xmid, ymid = 0.5*(xedge[1:]+xedge[:-1]), 0.5*(yedge[1:]+yedge[:-1])
+    ax2[1].contour(xmid, ymid, np.log10(H).T, levels=10, colors='white', linewidths=0.5)
+    fig.colorbar(cb, ax=ax2[1])
+
+    fig.suptitle(r'Face-on density field', fontsize=14, y=1.02)
+    fig.tight_layout()
+    fig.savefig(figname_density, dpi=300, bbox_inches='tight')
+    print(f"Saved to {figname_density}")
 
     fig, ax3 = plt.subplots(figsize=(6, 5))
     R_mid, bar_angles0, bar_strength0 = bar_angle_bar_strength_w(x_model, y_model, w_model, R_anulus=np.arange(1, 5, 0.1))

@@ -490,9 +490,9 @@ if __name__ == '__main__':
     CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_0418_beta25_gamma140_D50_gal2_fixedbarlength.pkl'
     data_filename = 'mock_data/mock_Nbody_bar_XY_withRot_Nbins600_beta25_gamma140_D50_gal2.pkl'
 
-    # output_filename = data_folder + '/best_fit_orbital_library_0415_beta25_gamma140_D50_gal2.pkl'
+    # output_filename = data_folder + '/best_fit_orbital_library_0415_beta25_gamma140_D50_gal2_fixedbarlength.pkl'
     output_filename = data_folder + '/best_fit_orbital_library_0418_beta25_gamma140_D50_gal2_fixedbarlength.pkl'
-    DISCARD = 300
+    DISCARD = 600
     THIN = 1
 
     # ── Model: run diagnostic for best-fit params ──
@@ -528,6 +528,7 @@ if __name__ == '__main__':
                     logRs_disk_best_fit,
                     logHs_disk_best_fit,
                     logRs_bar_best_fit,   
+                    # 0.68,
                     alpha,
                     beta,
                     gamma,
@@ -604,6 +605,7 @@ if __name__ == '__main__':
     weights = output_dict['weights']        # (n_orbits,)
     o_traj = output_dict['y_traj']            # (n_orbits, 4, N_max, 6)
     t_traj = output_dict['t_traj']            # (n_orbits, 4, N_max)
+    mean_mass_per_orbit = output_dict['mass_per_orbit']  # (n_orbits,)
 
     # weights = np.repeat(weights, 4)
     # y_traj = np.stack(y_traj, axis = 1)
@@ -702,6 +704,7 @@ if __name__ == '__main__':
             'vy_orb': vy_orb,               # list of (n_time, 3) arrays
             'vz_orb': vz_orb,               # list of (n_time, 3) arrays
             'weights': weights,                 # (n_orbits_total,)
+            'mean_mass_per_orbit': mean_mass_per_orbit / n_time,   # (n_orbits_total,)
             'rotation_matrix': output_dict['rotation_matrix'],
             'Omega_bar': output_dict['Omega_bar'],
             'logl_all': output_dict['logl_all'],
