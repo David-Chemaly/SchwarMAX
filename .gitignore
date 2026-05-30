@@ -5,3 +5,5 @@
 *.jpg
 *.pyc
 CLAUDE.md
+/for_sharing
+load_data.ipynb

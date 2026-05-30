@@ -605,8 +605,8 @@ def solve_nnls_admm(
     eps = 1e-8
     y_xy_safe = jnp.where(jnp.abs(y_xy) > eps, y_xy, 1.0)
 
-    w_rzphi = jnp.sqrt(1.0)# / A_Rzphi.shape[0]
-    w_xy    = jnp.sqrt(1.0)# / A_xy.shape[0]
+    w_rzphi = jnp.sqrt(5.0)# / A_Rzphi.shape[0]
+    w_xy    = jnp.sqrt(5.0)# / A_xy.shape[0]
     w_h     = jnp.sqrt(1.0)# / A_h1.shape[0]
 
     U_rz  = w_rzphi * (A_Rzphi / (sig_Rzphi[:, None] + eps))
@@ -827,25 +827,40 @@ def compute_model_and_logl_bootstrap(
         res_h2 = jnp.where(h2_model < 9.9, ((h2_model - y_h2_i) / (sig_A2 + EPSILON))**2, 0)
         res_h3 = jnp.where(h3_model < 9.9, ((h3_model - y_h3_i) / (sig_A3 + EPSILON))**2, 0)
         res_h4 = jnp.where(h4_model < 9.9, ((h4_model - y_h4_i) / (sig_A4 + EPSILON))**2, 0)
-        logl = -0.5 * (jnp.nansum(res_density) + jnp.nansum(res_h1) + jnp.nansum(res_h2) +
-                       jnp.nansum(res_h3) + jnp.nansum(res_h4))# - (jnp.sum(jnp.log(sig_xy)) +
-                        # jnp.sum(jnp.log(sig_A1)) + jnp.sum(jnp.log(sig_A2)) +
-                        # jnp.sum(jnp.log(sig_A3)) + jnp.sum(jnp.log(sig_A4)))
+
+        logl_density = -0.5 * jnp.nansum(res_density) # - jnp.sum(jnp.log(sig_xy))
+        logl_h1 = -0.5 * jnp.nansum(res_h1) # - jnp.sum(jnp.log(sig_A1))
+        logl_h2 = -0.5 * jnp.nansum(res_h2) # - jnp.sum(jnp.log(sig_A2))
+        logl_h3 = -0.5 * jnp.nansum(res_h3) # - jnp.sum(jnp.log(sig_A3))
+        logl_h4 = -0.5 * jnp.nansum(res_h4) # - jnp.sum(jnp.log(sig_A4))
+
+        logl_kine = logl_h1 + logl_h2 + logl_h3 + logl_h4
+        logl = logl_density + logl_kine
+
+        # logl = -0.5 * (jnp.nansum(res_density) + jnp.nansum(res_h1) + jnp.nansum(res_h2) +
+        #                jnp.nansum(res_h3) + jnp.nansum(res_h4))# - (jnp.sum(jnp.log(sig_xy)) +
+        #                 # jnp.sum(jnp.log(sig_A1)) + jnp.sum(jnp.log(sig_A2)) +
+        #                 # jnp.sum(jnp.log(sig_A3)) + jnp.sum(jnp.log(sig_A4)))
         # logl = -0.5 * (jnp.nansum(res_h1) + jnp.nansum(res_h2) +
         #                jnp.nansum(res_h3) + jnp.nansum(res_h4))# - (
         #                 # jnp.sum(jnp.log(sig_A1)) + jnp.sum(jnp.log(sig_A2)) +
         #                 # jnp.sum(jnp.log(sig_A3)) + jnp.sum(jnp.log(sig_A4)))
 
         V_model, sigma_model = h_to_V_sigma(h1_model, h2_model, v0, s)
-        return logl, density_2DXY, h1_model, h2_model, h3_model, h4_model, V_model, sigma_model
+        return logl, density_2DXY, h1_model, h2_model, h3_model, h4_model, V_model, sigma_model, logl_density, logl_kine
 
-    logl_all, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all = \
+    logl_all, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_density_all, logl_kine_all = \
         jax.vmap(_single)(weights_all, y_xy_boot, y_h1_boot, y_h2_boot, y_h3_boot, y_h4_boot)
 
     # Log-mean-exp
     logl_max = jnp.max(logl_all)
     logl_marg = logl_max + jnp.log(jnp.mean(jnp.exp(logl_all - logl_max)))
     # logl_marg = jnp.mean(logl_all)
+
+    logl_kine_max = jnp.max(logl_kine_all)
+    logl_kine_marg = logl_kine_max + jnp.log(jnp.mean(jnp.exp(logl_kine_all - logl_kine_max)))
+    log_dens_max = jnp.max(logl_density_all)
+    log_dens_marg = log_dens_max + jnp.log(jnp.mean(jnp.exp(logl_density_all - log_dens_max)))
 
     # Penalty for model flexibility
     delta_XY_boot = density_all - density_all[0, :]
@@ -865,7 +880,7 @@ def compute_model_and_logl_bootstrap(
     diff_h4 = jnp.sum(jnp.sum(delta_h4_boot * delta_h4_data, axis = 0) / (sig_A4*sig_A4))
     m_eff = 1/delta_XY_boot.shape[0] * (diff_XY + diff_h1 + diff_h2 + diff_h3 + diff_h4)
 
-    return logl_marg, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_all, m_eff
+    return logl_marg, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_all, m_eff, log_dens_marg, logl_kine_marg
 
 
 @jax.jit
@@ -1623,12 +1638,12 @@ def model_fixed_potential_bootstrap(params_halo_pot, dict_phi_baryon,
                             y_Rzphi, y_xy,
                             y_xy_boot, y_h1_boot, y_h2_boot, y_h3_boot, y_h4_boot,
                             sig_Rzphi, sig_xy, sig_A1, sig_A2, sig_A3, sig_A4,
-                            lambda_reg=1, maxiter=500,
+                            lambda_reg=1, maxiter=250,
     )  # (N_boot, n_orb)
 
     #===================================== Compute model vectors + logL for each bootstrap ==================================
 
-    logl_marg, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_all, m_eff = \
+    logl_marg, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_all, m_eff, log_dens_marg, logl_kine_marg = \
         compute_model_and_logl_bootstrap(
             weights_all,
             A_Rzphi, A_xy, A_h1, A_h2, A_h3, A_h4,
@@ -1638,7 +1653,7 @@ def model_fixed_potential_bootstrap(params_halo_pot, dict_phi_baryon,
             v0, s,
         )
 
-    return weights_all, logl_marg, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_all, m_eff
+    return weights_all, logl_marg, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_all, m_eff, log_dens_marg, logl_kine_marg
 
 
 def model_fixed_potential_diagnostic(params_halo_pot, dict_phi_baryon,

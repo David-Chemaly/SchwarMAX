@@ -175,6 +175,7 @@ if __name__ == '__main__':
     data_folder = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data'
     path = '/Users/hanyuan/Dropbox/python_script/SchwarMAX/'
     figname = data_folder + '/plots/orbital_structure_R_vs_circularity.png'
+    FIG_PAPER = data_folder + '/figs_paper/orbital_structure_R_vs_circularity_paper.pdf'
     orbital_library_file = data_folder + '/best_fit_orbital_library.pkl'
     CHECKPOINT_FILE = data_folder + '/ensemble_checkpoint_0415_beta25_gamma140_D50_gal2.pkl'
 
@@ -291,6 +292,8 @@ if __name__ == '__main__':
     n_particles = len(x_m)
     d_scale = 0.1 * jnp.ones(n_particles)
     v_scale = 0.1 * _Vc
+    # d_scale = 0. * jnp.ones(n_particles)
+    # v_scale = 0. * _Vc
     v_scale = jnp.clip(v_scale, a_min=1, a_max = 15)
     x_m = jnp.array((jax.random.normal(keys[0], (n_particles,))) * d_scale + x_m)
     y_m = jnp.array((jax.random.normal(keys[1], (n_particles,))) * d_scale + y_m)
@@ -367,11 +370,12 @@ if __name__ == '__main__':
     H, xedges, yedges = np.histogram2d(np.log10(R_disc[R_cut]), circularity_disc[R_cut],
                                       bins=[50, 70], range=[[-1., 1.], [-1., 1.]],
                                       weights=mass_data[mask_disc][R_cut])
+    H = sp.ndimage.gaussian_filter(H, sigma=1.0)  # Smooth the histogram
     H_col = H / np.sum(H, axis = 1)[:, np.newaxis]
     H_col1 = H_col/np.amax(H_col, axis = 1)[:, np.newaxis]
-    im0 = ax.pcolormesh(xedges, yedges, H_col1.T, cmap='inferno',)
+    im0 = ax.pcolormesh(xedges, yedges, H_col1.T, cmap=cmr.lavender, rasterized = True)
     ax.set_xlabel(r'$\log_{10}(R \, [{\rm kpc}])$')
-    ax.set_ylabel(r'Circularity $\lambda = L_z / L_{\rm circ}(E)$')
+    ax.set_ylabel(r'Circularity $\lambda_z = L_z / L_{\rm circ}(E)$')
     ax.set_title('N-body')
     ax.axhline(0, color='white', ls='--', lw=0.5)
     ax.axhline(1, color='white', ls=':', lw=0.5)
@@ -382,20 +386,21 @@ if __name__ == '__main__':
     R_cut_m = R_model < 10
     H, xedges, yedges = np.histogram2d(np.log10(R_model[R_cut_m]), circularity_model[R_cut_m],
                                       bins=[50, 70], range=[[-1., 1.], [-1., 1.]],
-                                      weights=w_model[R_cut_m])
+                                      weights=w_model[R_cut_m],)
+    H = sp.ndimage.gaussian_filter(H, sigma=1.0)  # Smooth the histogram
     H_col = H / np.sum(H, axis = 1)[:, np.newaxis]
     H_col2 = H_col/np.amax(H_col, axis = 1)[:, np.newaxis]
-    im1 = ax.pcolormesh(xedges, yedges, H_col2.T, cmap='inferno',)
+    im1 = ax.pcolormesh(xedges, yedges, H_col2.T, cmap=cmr.lavender, rasterized = True)
     ax.set_xlabel(r'$\log_{10}(R \, [{\rm kpc}])$')
-    ax.set_title('Model (best fit)')
+    ax.set_title('Best-fit model')
     ax.axhline(0, color='white', ls='--', lw=0.5)
     ax.axhline(1, color='white', ls=':', lw=0.5)
     ax.axhline(-1, color='white', ls=':', lw=0.5)
 
     ax = axes[2]
-    im2 = ax.pcolormesh(xedges, yedges, (H_col1 - H_col2).T, cmap='coolwarm',vmin=-0.5, vmax=0.5)
+    im2 = ax.pcolormesh(xedges, yedges, (H_col1 - H_col2).T, cmap='coolwarm',vmin=-0.5, vmax=0.5, rasterized = True)
     ax.set_xlabel(r'$\log_{10}(R \, [{\rm kpc}])$')
-    ax.set_title('Difference (N-body - Model)')
+    ax.set_title('Difference')
     ax.axhline(0, color='white', ls='--', lw=0.5)
     ax.axhline(1, color='white', ls=':', lw=0.5)
     ax.axhline(-1, color='white', ls=':', lw=0.5)
@@ -406,7 +411,7 @@ if __name__ == '__main__':
     for ax_i, im_i in zip(axes[:-1], [im0, im1]):
         pos = ax_i.get_position()
         cax = fig.add_axes([pos.x0, 0.06, pos.width, 0.03])
-        cbar = fig.colorbar(im_i, cax=cax, orientation='horizontal', label='Column-normalised density')
+        cbar = fig.colorbar(im_i, cax=cax, orientation='horizontal', label=r'$P(\lambda_z \, | \, R)$')
         cbar.ax.tick_params(labelsize=10)
 
     pos = axes[-1].get_position()
@@ -415,4 +420,5 @@ if __name__ == '__main__':
     cbar.ax.tick_params(labelsize=10)
 
     fig.savefig(figname, dpi=300, bbox_inches='tight')
+    fig.savefig(FIG_PAPER, dpi=300, bbox_inches='tight')
     print(f"Saved to {figname}")

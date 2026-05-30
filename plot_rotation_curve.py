@@ -1,3 +1,5 @@
+from functools import partial
+
 import agama
 agama.setUnits(mass=1, length=1, velocity=1)
 import numpy as np
@@ -10,6 +12,7 @@ from dehnen_bar import T3_potential, V4_potential
 from tqdm import tqdm
 
 import pickle
+from utils import *
 
 from astropy import units as u
 from astropy.constants import G
@@ -43,6 +46,50 @@ def plot_prettier(dpi=200, fontsize=12, usetex=False):
     plt.rcParams['font.serif'] = ['Times New Roman'] + plt.rcParams['font.serif']
 plot_prettier(usetex=False)
 
+@partial(jax.jit, static_argnames=("potential_fn",))
+def get_rotation_curve_alongphi(R, potential_fn, potential_args=(), z=0.0, phi = 0.0, dR=1e-3):
+    """
+    Circular speed curve for an axisymmetric potential.
+
+    Uses:
+        v_c^2(R, z) = R * dPhi/dR
+
+    Parameters
+    ----------
+    R : float or array-like
+        Cylindrical radius (kpc).
+    potential_fn : callable
+        Function with signature:
+            potential_fn(x, y, z, *potential_args) -> Phi
+        and Phi in units of kpc^2 / Gyr^2.
+    potential_args : tuple, optional
+        Extra arguments forwarded to potential_fn.
+    z : float, optional
+        Height where dPhi/dR is evaluated (default 0.0).
+    dR : float, optional
+        Finite-difference step in kpc.
+
+    Returns
+    -------
+    v_c : float or jnp.ndarray
+        Circular speed in kpc / Gyr, with the same shape as R.
+    """
+    R = jnp.asarray(R)
+    R_shape = R.shape
+    R_flat = jnp.ravel(R)
+    R_safe = jnp.maximum(jnp.abs(R_flat), 2 * dR)
+
+    def phi_of_R_scalar(r, phi):
+        x, y = r * jnp.cos(phi), r * jnp.sin(phi)
+        return potential_fn(x, y, z, *potential_args)
+
+    def dphi_dr_scalar(r):
+        return (phi_of_R_scalar(r + dR, phi) - phi_of_R_scalar(r - dR, phi)) / (2.0 * dR)
+
+    dPhi_dR = jax.vmap(dphi_dr_scalar)(R_safe)
+    vc2 = jnp.maximum(R_safe * dPhi_dR, 0.0)
+    v_c = jnp.sqrt(vc2)
+    return jnp.reshape(v_c, R_shape)
 
 def bar_angle_bar_strength(x, y, R_anulus = np.arange(1,5,0.25)):
 
@@ -224,11 +271,13 @@ if __name__ == '__main__':
     path = '/Users/hanyuan/Dropbox/python_script/SchwarMAX/'
 
     figname = data_folder+'/plots/rotation_curve_data_vs_model.png'
+    FIGS_PAPER = data_folder+'/figs_paper/rotation_curve_data_vs_model.pdf'
     # CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_gal2_0406.pkl'
-    CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_0415_beta25_gamma140_D50_gal2.pkl'
+    # CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_0415_beta25_gamma140_D50_gal2.pkl'
+    CHECKPOINT_FILE = data_folder+'/mcmc_checkpoint_0422_beta25_gamma140_D50_gal2.pkl'
     
-    DISCARD=400
-    THIN=1
+    DISCARD=600
+    THIN=10
     posterior, logprob, step = load_checkpoint(CHECKPOINT_FILE)
     posterior = posterior[:, logprob[-1, :]>np.amax(logprob[-1, :])-100, :]
     posterior = posterior[DISCARD::THIN, :, :]
@@ -301,15 +350,71 @@ if __name__ == '__main__':
 
     Vc_model = []
     for i in tqdm(range(0, posterior.shape[0])):
-        params_baryon_rho, params_halo_pot = load_potential_dict(posterior[i])
-        _Vc = jax.vmap(get_rotation_curve, in_axes=(0, None, None, 0))(
+        phi_grid = np.linspace(0, 2*np.pi, 10)
+        _Vc_phi = []
+        for phi in phi_grid:
+            params_baryon_rho, params_halo_pot = load_potential_dict(posterior[i])
+            _Vc = jax.vmap(get_rotation_curve_alongphi, in_axes=(0, None, None, 0, None))(
+                jnp.array(r_plot),
+                potential_func,
+                (params_baryon_rho, params_halo_pot),
+                jnp.array(r_plot*0), 
+                phi,
+            )
+            _Vc_phi.append(_Vc)
+        Vc_model.append(np.mean(_Vc_phi, axis=0))
+
+
+    ground_truth_dict = {
+    'logM_halo': 11.88,
+    'logM_disk': 10.75,
+    'logM_bar': 10.2,
+    'logRs_halo': np.log10(19.2),
+    'logRs_disk': np.log10(9.0),
+    'logHs_disk': np.log10(0.8),
+    'logL_bar': np.log10(4.87),
+    'alpha': 40 ,       # 30 deg → rad
+    'beta': 25 ,        # 20 deg → rad
+    'gamma': 140 ,      # 140 deg → rad
+    'log_mass_to_light': 0.,   # Upsilon=1 → log=0
+    'Omega': 25.0,      # Omega=25 → log
+    }
+    # Ordered array matching param_names_raw
+    logM_10_gt, logc_halo_gt = logM_logRs_to_logMenc_logc(
+        ground_truth_dict['logM_halo'], ground_truth_dict['logRs_halo'])
+    ground_truth_dict['logM_10kpc'] = logM_10_gt
+    ground_truth_dict['logc_halo'] = logc_halo_gt
+
+
+    dens_param = np.array([
+        ground_truth_dict['logM_10kpc'],
+        ground_truth_dict['logM_disk'],
+        ground_truth_dict['logM_bar'],
+        ground_truth_dict['logc_halo'],
+        ground_truth_dict['logRs_disk'],
+        ground_truth_dict['logHs_disk'],
+        ground_truth_dict['logL_bar'],
+        np.deg2rad(ground_truth_dict['alpha']),
+        np.deg2rad(ground_truth_dict['beta']),
+        np.deg2rad(ground_truth_dict['gamma']),
+        ground_truth_dict['log_mass_to_light'],
+        np.log10(ground_truth_dict['Omega']),
+        0.0,  # log_sigma_amplifier
+    ])
+    phi_grid = np.linspace(0, 2*np.pi, 10)
+    _Vc_phi = []
+    for phi in phi_grid:
+        params_baryon_rho, params_halo_pot = load_potential_dict(dens_param)
+        _Vc = jax.vmap(get_rotation_curve_alongphi, in_axes=(0, None, None, 0, None))(
             jnp.array(r_plot),
             potential_func,
             (params_baryon_rho, params_halo_pot),
-            jnp.array(r_plot*0)
+            jnp.array(r_plot*0), 
+            phi,
         )
-        Vc_model.append(_Vc)
-    
+        _Vc_phi.append(_Vc)
+    Vc_density_model = np.mean(_Vc_phi, axis=0)
+
     Vc_model = np.array(Vc_model)
     Vc_model_16, Vc_model_50, Vc_model_84 = np.percentile(Vc_model, [5, 50, 95], axis=0)
     plt.fill_between(r_plot, Vc_model_16, Vc_model_84, color='tomato', alpha=0.2, label=r'$1\sigma$ interval')
@@ -324,5 +429,22 @@ if __name__ == '__main__':
     plt.legend(frameon=False, fontsize=10, loc='lower right')
     plt.tight_layout()
     plt.savefig(figname, dpi=300)
+    plt.savefig(FIGS_PAPER, dpi=300)
+    plt.show()
+
+    fig, ax = plt.subplots(figsize=(4,3))
+    ax.plot(r_plot, v_circular - Vc_model_50, lw = 3, alpha = 1, label='Ground truth', color = 'royalblue')
+    
+    ax.fill_between(r_plot, v_circular - Vc_model_84, v_circular - Vc_model_16, color='tomato', alpha=0.2, label=r'$1\sigma$ interval')
+    ax.plot(r_plot, v_circular - Vc_model_50, lw = 2, ls = '--', alpha = 0.7, label='Best-fit model', color = 'tomato')
+    ax.plot(r_plot, v_circular - Vc_density_model, lw = 2, ls = '--', alpha = 0.7, label='density fit model', color = 'green')
+    
+    plt.xlim(0., 20.)
+    plt.axvline(10., color='grey', ls='--', lw=1, alpha=0.7, label = 'Data extent')
+    plt.axhline(0., color='grey', ls='--', lw=1, alpha=0.7)
+    plt.ylim(-20,   20)
+    plt.xlabel('Galactocentric Radius, R [kpc]')
+    plt.ylabel('Circular Velocity Residual, $V_c^{data} - V_c^{model}$ [km/s]')
+    plt.legend(frameon=False, fontsize=10, loc='upper right')
     plt.show()
 

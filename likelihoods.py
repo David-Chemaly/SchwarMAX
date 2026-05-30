@@ -432,7 +432,7 @@ def logl_fixed_potential_bootstrap(params, dict_phi_baryon, dict_data, num_Vbin,
     phimin, phimax = dict_data['phi_minmax']
     Rzphi_n_grid = dict_data['Rzphi_n_grid']
 
-    weights_all, _logl_marg, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_all, _m_eff = \
+    weights_all, _logl_marg, density_all, h1_all, h2_all, h3_all, h4_all, V_all, sigma_all, logl_all, _m_eff, log_dens_marg, logl_kine_marg = \
         model_fixed_potential_bootstrap(params_halo_pot, dict_phi_baryon, 
                                         Omega_bar, light_to_mass_ratio, 
                                         dict_data, num_Vbin, 
@@ -442,13 +442,13 @@ def logl_fixed_potential_bootstrap(params, dict_phi_baryon, dict_data, num_Vbin,
     
 
     def _true_func():
-        return -jnp.inf
+        return -jnp.inf, -jnp.inf, -jnp.inf, -jnp.inf
     def _false_func():
-        return _logl_marg - _m_eff
+        return _logl_marg, _m_eff, log_dens_marg, logl_kine_marg
 
     nan_in_weights = jnp.isnan(weights_all).any()
-    val = jax.lax.cond(nan_in_weights, _true_func, _false_func)
-    return val, _m_eff
+    _logl_marg, _m_eff, log_dens_marg, logl_kine_marg = jax.lax.cond(nan_in_weights, _true_func, _false_func)
+    return _logl_marg, _m_eff, log_dens_marg, logl_kine_marg
 
 @partial(jax.jit, static_argnames=('num_Vbin', 'Rzphi_n_tot'))
 def logl_fixed_potential_bootstrap_amp(params, dict_phi_baryon, params_halo, dict_data, num_Vbin, Rzphi_n_tot):

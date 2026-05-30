@@ -140,6 +140,7 @@ if __name__ == '__main__':
     path = '/Users/hanyuan/Dropbox/python_script/SchwarMAX/'
     data_folder = '/Users/hanyuan/Desktop/PhD_projects/SchwarMAX_data'
     figname = data_folder + '/plots/vlos_distribution.png'
+    FIG_PAPER = data_folder + '/figs_paper/vlos_distribution_vary_Omega.pdf'
     orbital_library_file = data_folder + '/best_fit_orbital_library.pkl'
     print("Loading orbital library...")
     with open(orbital_library_file, 'rb') as f:
@@ -314,13 +315,13 @@ if __name__ == '__main__':
     # Red and blue box centers: (-3.0, 1.0) and (-1.8, 0.6)
     # Direction vector: (1.2, -0.4) per step
     # Box 0 (green):  center (-4.2, 1.4) — one step left of red
-    plot_vlos_panel(ax[0], [-4.7, -3.7], [0.9, 1.9], [-100, 300], 'darkorange')
+    plot_vlos_panel(ax[0], [-4.7, -3.7], [0.9, 1.9], [-150, 300], 'darkorange')
     # Box 1 (red):    center (-3.0, 1.0)
-    plot_vlos_panel(ax[1], [-3.5, -2.5], [0.5, 1.5], [-100, 300], 'red')
+    plot_vlos_panel(ax[1], [-3.5, -2.5], [0.5, 1.5], [-150, 300], 'red')
     # Box 3 (blue):   center (-1.8, 0.6)
-    plot_vlos_panel(ax[3], [-2.3, -1.3], [0.1, 1.1], [-200, 350], 'blue')
+    plot_vlos_panel(ax[3], [-2.3, -1.3], [0.1, 1.1], [-150, 300], 'blue')
     # Box 4 (green): center (-0.6, 0.2) — one step right of blue
-    plot_vlos_panel(ax[4], [-1.1, -0.1], [-0.3, 0.7], [-300, 350], 'green')
+    plot_vlos_panel(ax[4], [-1.1, -0.1], [-0.3, 0.7], [-150, 300], 'green')
 
     # Hide y-axis on all vlos panels and center map
     for i in [0, 1, 3, 4]:
@@ -345,3 +346,4 @@ if __name__ == '__main__':
 
     # plt.show()
     fig.savefig(figname, bbox_inches='tight')
+    fig.savefig(FIG_PAPER, bbox_inches='tight')

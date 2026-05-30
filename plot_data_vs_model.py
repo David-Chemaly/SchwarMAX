@@ -156,10 +156,12 @@ with open(path + data_filename, 'rb') as f:
 DISCARD = 600        # burn-in steps to discard for corner plot
 THIN = 1             # thinning factor for corner plot
 
-CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_0415_beta25_gamma140_D50_gal2.pkl'
+# CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_0415_beta25_gamma140_D50_gal2.pkl'
+CHECKPOINT_FILE = data_folder+'/mcmc_checkpoint_0422_beta25_gamma140_D50_gal2.pkl'
 # CHECKPOINT_FILE = data_folder+'/ensemble_checkpoint_0418_beta25_gamma140_D50_gal2_fixedbarlength.pkl'
 
-figname = data_folder+'/plots/mock_Nbins600_beta25_gamma140_D50_gal2_Omega35.png'
+figname = data_folder+'/plots/mock_Nbins600_beta25_gamma140_D50_gal2.png'
+FIG_PAPER      = data_folder+'/figs_paper/mock_Nbins600_beta25_gamma140_D50_gal2.pdf'
 # figname = data_folder+'/plots/mock_Nbins600_beta25_gamma140_D50_gal2_fixedbarlength.png'
 
 param_names = ['logM_halo', 'logM_disk', 'logM_bar', 'logRs_halo', 'logRs_disk', 'logHs_disk', 'logRs_bar', 
@@ -167,16 +169,33 @@ param_names = ['logM_halo', 'logM_disk', 'logM_bar', 'logRs_halo', 'logRs_disk',
                r'$\log_{10}(L/M)$', r'$\log_{10}(\Omega)$', r'$\log_{10}(\sigma amplifier)$']
 
 
+# posterior, logprob, step = load_checkpoint(CHECKPOINT_FILE)
+# posterior = posterior[:, logprob[-1, :]>np.amax(logprob[-1, :])-100, :]
+# posterior = posterior[DISCARD::THIN, :, :]
+# posterior = posterior.reshape(-1, posterior.shape[-1])
+
+
+# best_fit_param = np.percentile(posterior, 50, axis=0)
+# print("Best-fit parameters:")
+# for i, name in enumerate(param_names):
+#     print(f"{name}: {best_fit_param[i]:.4f}")
+
 posterior, logprob, step = load_checkpoint(CHECKPOINT_FILE)
-posterior = posterior[:, logprob[-1, :]>np.amax(logprob[-1, :])-100, :]
+chain_mask = logprob[-1, :] > np.amax(logprob[-1, :]) - 100
+posterior = posterior[:, chain_mask, :]
+logprob = logprob[:, chain_mask]
+
+# Drop burn-in and flatten so parameters and logprob stay aligned.
 posterior = posterior[DISCARD::THIN, :, :]
-posterior = posterior.reshape(-1, posterior.shape[-1])
+logprob = logprob[DISCARD::THIN, :]
+posterior_flat = posterior.reshape(-1, posterior.shape[-1])
+logprob_flat = logprob.reshape(-1)
 
+best_idx = np.argmax(logprob_flat)
+best_logprob = logprob_flat[best_idx]
+best_fit_param = posterior_flat[best_idx]
 
-best_fit_param = np.percentile(posterior, 50, axis=0)
-print("Best-fit parameters:")
-for i, name in enumerate(param_names):
-    print(f"{name}: {best_fit_param[i]:.4f}")
+print(f"Best-fit log-probability: {best_logprob:.2f}")
 
 dict_data['logl_density_max'] = -0.24
 logMhalo_10_best_fit, logMdisk_best_fit, logMbar_best_fit, logC_halo_best_fit, logRs_disk_best_fit, logHs_disk_best_fit, logRs_bar_best_fit,\
@@ -199,8 +218,8 @@ ground_truth = [logMhalo_best_fit,
                 gamma,
                 logLM_best_fit,
                 # 0.,
-                # logOmega_best_fit,
-                jnp.log10(35.0).item(),
+                logOmega_best_fit,
+                # jnp.log10(26.0).item(),
                 logSigma_amplifier_best_fit
 ]
 # ground_truth = [
@@ -291,14 +310,14 @@ print('Model Done')
 
 print('logL:', logL)
 
-_, logl_marg, _, _, _, _, _, _, _, logl_all, _ = model_bootstrap(params_halo_pot, params_disk_rho, dict_data, dict_data['total_bins'], 
-                                                                 Rzphi_n_tot, Rzphi_n_grid, Rzphi_lim_grid=jnp.array([[Rmin, Rmax],[zmin, zmax],[phimin, phimax]]),
-                                                                xy_lim_grid=xy_lim_grid,
-                                                                xy_n_grid=xy_n_grid)
-print('logL (formal_pipeline):', logl_marg)
+# _, logl_marg, _, _, _, _, _, _, _, logl_all, _ = model_bootstrap(params_halo_pot, params_disk_rho, dict_data, dict_data['total_bins'], 
+#                                                                  Rzphi_n_tot, Rzphi_n_grid, Rzphi_lim_grid=jnp.array([[Rmin, Rmax],[zmin, zmax],[phimin, phimax]]),
+#                                                                 xy_lim_grid=xy_lim_grid,
+#                                                                 xy_n_grid=xy_n_grid)
+# print('logL (formal_pipeline):', logl_marg)
 
 mass_unit = 1/((G*u.Msun).to(u.kpc*(u.km/u.s)**2))
-w0_data, mass_data = agama.readSnapshot(data_folder + '/Bar_model_TG21/model/t_t0_4')
+w0_data, mass_data = agama.readSnapshot(data_folder + '/Bar_model_TG21/model/t_t0_7')
 mass_data = mass_data * mass_unit.value
 
 mask = (mass_data!=np.unique(mass_data)[-1])
@@ -391,15 +410,23 @@ h2_model_data = y_h2[index_remap]
 h3_model_data = y_h3[index_remap]
 h4_model_data = y_h4[index_remap]
 
+sig_xy = sig_xy[index_remap]
+sig_A1 = sig_A1[index_remap]
+sig_A2 = sig_A2[index_remap]
+sig_A3 = sig_A3[index_remap]
+sig_A4 = sig_A4[index_remap]
+
 model_batch = (density_2DXY_weighted, V_model_weighted, sigma_model_weighted, h3_model_weighted, h4_model_weighted)
 data_batch = (density_2DXY_data, V_model_data, sigma_model_data, h3_model_data, h4_model_data)
+err_batch = (density_2DXY_data, 5, 5, sig_A3, sig_A4)
 
 fig_names = [r'$\Sigma_{\rm *}$ [L$_\odot$/pc$^2$]', r'$V_{\rm los}$ [km/s]', r'$\sigma_{v}$ [km/s]', r'$h_3$', r'$h_4$']
 fig_names_save = ['Surface_density', 'V_los', 'Sigma_V', 'h3', 'h4']
 color_maps = [cmr.sepia, cmr.iceburn,  cmr.amber, cmr.iceburn, cmr.amber]
 vmin_ls = [1e1, -200, 20, -0.2, -0.2]
 vmax_ls = [1e4, 200, 150, 0.2, 0.1]
-vminmax_ls = [0.15, 25, 25, 0.15, 0.15]
+# vminmax_ls = [0.15, 25, 25, 0.15, 0.15]
+vminmax_ls = [0.25, 5, 5, 5, 5]
 chi2_ls = [Chi2_density, Chi2_h1, Chi2_h2, Chi2_h3, Chi2_h4]
 
 fig1, ax1 = plt.subplots(len(model_batch),3, figsize = (18, 2.5 * len(model_batch)), gridspec_kw={'hspace':0.4, 'wspace':0.3})
@@ -449,7 +476,21 @@ for i in range(len(model_batch)):
 
     # fig0.savefig(f'/data/hz420-2/SchwarMAX/plots/Mock_disc_bulge_{fig_names_save[i]}.png', bbox_inches='tight', dpi=300)
 
-    cb = ax1[i][0].scatter(X_regular_grid, Y_regular_grid, c=model_batch[i],
+
+    # res = (np.log10(data_batch[i]) - np.log10(model_batch[i])) if i == 0 else (data_batch[i] - model_batch[i])
+    data_i = data_batch[i]
+    model_i = model_batch[i]
+
+    
+    res = (data_i - model_i)
+    res_frac = res / err_batch[i]
+
+    if i == 3:
+        model_i = np.where(res_frac>np.amax(res_frac)-0.1, 0., model_i)
+        res_frac = (data_i - model_i) / err_batch[i]
+        
+
+    cb = ax1[i][0].scatter(X_regular_grid, Y_regular_grid, c=model_i,
                     s = 22, cmap=color_maps[i], marker = 's', norm = 'log' if i == 0 else None,
                     vmin = vmin_ls[i], vmax = vmax_ls[i], rasterized = True)
     ax1[i][0].set_title('Model' if i==0 else '', fontsize=18)
@@ -461,7 +502,7 @@ for i in range(len(model_batch)):
     cbar.set_label(fig_names[i], fontsize=18)
     cbar.ax.tick_params(labelsize=14)
 
-    cb = ax1[i][1].scatter(X_regular_grid, Y_regular_grid, c=data_batch[i],
+    cb = ax1[i][1].scatter(X_regular_grid, Y_regular_grid, c=data_i,
                     s = 22, cmap=color_maps[i], marker = 's', norm = 'log' if i == 0 else None,
                     vmin = vmin_ls[i], vmax = vmax_ls[i], rasterized = True)
     ax1[i][1].set_title('Data' if i==0 else '', fontsize=18)
@@ -473,23 +514,22 @@ for i in range(len(model_batch)):
     cbar.set_label(fig_names[i], fontsize=18)
     cbar.ax.tick_params(labelsize=14)
 
-    # res = (data_batch[i] - model_batch[i]) / data_batch[i] if i == 0 else (data_batch[i] - model_batch[i])
-    res = (np.log10(data_batch[i]) - np.log10(model_batch[i])) if i == 0 else (data_batch[i] - model_batch[i])
-    cb = ax1[i][2].scatter(X_regular_grid, Y_regular_grid, c=res,
+    cb = ax1[i][2].scatter(X_regular_grid, Y_regular_grid, c=res_frac,
                     s = 22, cmap='coolwarm', marker = 's', vmin = -vminmax_ls[i], vmax = vminmax_ls[i], rasterized = True)
     ax1[i][2].set_title('Residuals' if i == 0 else '', fontsize=18)
     ax1[i][2].set_xlabel('X [kpc]', fontsize=12)
     ax1[i][2].set_ylabel('Y [kpc]', fontsize=12)
     ax1[i][2].set_xlim(X_minmax)
     ax1[i][2].set_ylim(Y_minmax)
-    ax1[i][2].text(0.05, 0.8, r'$\chi^2 = $'+f'{chi2_ls[i]:.2f}', transform=ax1[i][2].transAxes, fontsize=15)
+    # ax1[i][2].text(0.05, 0.8, r'$\chi^2 = $'+f'{chi2_ls[i]:.2f}', transform=ax1[i][2].transAxes, fontsize=15)
     cbar = fig1.colorbar(cb, ax=ax1[i][2])
-    cbar.set_label('Data - Model', fontsize=15)
+    cbar.set_label(r'$\frac{\Sigma_{\rm *, data} - \Sigma_{\rm *, model}}{\Sigma_{\rm *, data}}$' if i == 0 else 'Difference / Error', fontsize=15)
     cbar.ax.tick_params(labelsize=14)
 
     for j in range (0,3):
         ax1[i][j].contour(xmid, ymid, np.log10(H).T, levels=[2.2, 2.8, 3.1, 3.5, 4.], colors='white' if j!=2 else 'grey', linewidths=1)
 
 fig1.savefig(figname, bbox_inches='tight', dpi=300)
+fig1.savefig(FIG_PAPER, bbox_inches='tight', dpi=300)
 # plt.close()
 
